@@ -2624,4 +2624,12 @@
 
   <!-- GroupMentions.kt -->
   <string name="max_group_mentions_per_message_reached">You can mention up to %1$s members per message!</string>
+
+  <!-- Export Chat History -->
+  <string name="export_chat_history">Export chat history</string>
+  <string name="export_chat_history_title">Export Chat History</string>
+  <string name="export_date_range_selection">Select date range for export:</string>
+  <string name="export_start_date">Start Date</string>
+  <string name="export_end_date">End Date</string>
+  <string name="exporting_button">Exporting…</string>
 </resources>

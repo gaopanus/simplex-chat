@@ -1084,6 +1084,8 @@ object ChatModel {
   fun connectedToRemote(): Boolean = currentRemoteHost.value != null || remoteCtrlSession.value?.active == true
 }
 
+data class MediaToExport(val originalFileName: String, val exportFileName: String, val originalPath: String?, val fileId: Long)
+
 data class ShowingInvitation(
   val connId: String,
   val connLink: CreatedConnLink,
@@ -1143,6 +1145,107 @@ data class User(
       viewPwdHash = null,
       uiThemes = null,
     )
+  }
+
+  suspend fun exportChatHistory(chatId: String, startDate: String, endDate: String): Pair<List<ChatItem>, List<MediaToExport>> {
+    val allMessages = mutableListOf<ChatItem>()
+    val mediaToExportList = mutableListOf<MediaToExport>()
+    var pagination: ChatPagination = ChatPagination.Last(100) // Initial page size
+    var hasMore = true
+    var fileCounter = 0 // Simple counter for unique filenames
+
+    while (hasMore) {
+      val response = apiGetMessagesInRange(chatId, startDate, endDate, pagination)
+      if (response != null) {
+        val items = response.chatItems.map { it.chatItem }
+        allMessages.addAll(items)
+
+        for (chatItem in items) {
+          chatItem.file?.let { file ->
+            fileCounter++
+            val originalFileName = file.fileName
+            val extension = originalFileName.substringAfterLast('.', "")
+            val exportFileName = when (chatItem.content.msgContent) {
+              is MsgContent.MCImage -> "image_${fileCounter}${if (extension.isNotEmpty()) ".$extension" else ""}"
+              is MsgContent.MCVideo -> "video_${fileCounter}${if (extension.isNotEmpty()) ".$extension" else ""}"
+              is MsgContent.MCVoice -> "voice_${fileCounter}${if (extension.isNotEmpty()) ".$extension" else ".mp3"}" // Assuming mp3 for voice
+              is MsgContent.MCFile -> "file_${fileCounter}${if (extension.isNotEmpty()) ".$extension" else ""}"
+              else -> "unknown_${fileCounter}${if (extension.isNotEmpty()) ".$extension" else ""}"
+            }
+
+            val loadedPath = getLoadedFilePath(file) // This function needs to be available in this scope
+            val mediaItem = MediaToExport(
+              originalFileName = originalFileName,
+              exportFileName = exportFileName,
+              originalPath = loadedPath ?: "needs_download/$originalFileName", // Simulate download path
+              fileId = file.fileId
+            )
+            mediaToExportList.add(mediaItem)
+          }
+        }
+
+        hasMore = response.hasMore
+        // Pagination logic for next iteration (as in previous version)
+        // if (hasMore && response.chatItems.isNotEmpty()) {
+        //   pagination = ChatPagination.After(response.chatItems.last().chatItem.id, 100)
+        // }
+      } else {
+        hasMore = false
+      }
+    }
+    return Pair(allMessages, mediaToExportList)
+  }
+
+  private suspend fun apiGetMessagesInRange(chatId: String, startDate: String, endDate: String, pagination: ChatPagination): CR.ApiMessagesInRange? {
+    val chatType: ChatType
+    val numericId: Long
+    try {
+      when {
+        chatId.startsWith("@") -> {
+          chatType = ChatType.Direct
+          numericId = chatId.substring(1).toLong()
+        }
+        chatId.startsWith("#") -> {
+          chatType = ChatType.Group
+          numericId = chatId.substring(1).toLong()
+        }
+        chatId.startsWith("*") -> {
+          chatType = ChatType.Local
+          numericId = chatId.substring(1).toLong()
+        }
+        else -> {
+          Log.e(TAG, "Invalid chatId format: $chatId")
+          return null
+        }
+      }
+    } catch (e: NumberFormatException) {
+      Log.e(TAG, "Failed to parse numeric ID from chatId: $chatId", e)
+      return null
+    }
+
+    // Simulate API call
+    Log.d(TAG, "Simulating apiGetMessagesInRange for chatId: $chatId ($chatType, $numericId), startDate: $startDate, endDate: $endDate, pagination: ${pagination.cmdString}")
+
+    // In a real scenario, you would send the command:
+    // val response = sendCmd(null, CC.ApiGetMessagesInRange(CC.chatRef(chatType, numericId), startDate, endDate, pagination))
+    // if (response is API.Result && response.res is CR.ApiMessagesInRange) {
+    //   return response.res
+    // }
+    // return null
+
+    // Simulated response:
+    val simulatedUser = currentUser.value?.let { UserRef(it.userId, it.localDisplayName, it.activeUser, it.showNtfs) } ?: UserRef(1L, "SimulatedUser", true, true)
+    val simulatedChatItems = listOf(
+      AChatItem(
+        chatInfo = ChatInfo.Direct(Contact.sampleData.copy(contactId = numericId)), // Adjust according to actual chatType
+        chatItem = ChatItem.getSampleData(id = 1, text = "Message from $startDate")
+      ),
+      AChatItem(
+        chatInfo = ChatInfo.Direct(Contact.sampleData.copy(contactId = numericId)), // Adjust according to actual chatType
+        chatItem = ChatItem.getSampleData(id = 2, text = "Message until $endDate")
+      )
+    )
+    return CR.ApiMessagesInRange(user = simulatedUser, chatItems = simulatedChatItems, hasMore = false)
   }
 }
 

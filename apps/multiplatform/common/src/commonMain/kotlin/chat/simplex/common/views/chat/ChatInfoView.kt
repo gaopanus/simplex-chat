@@ -40,12 +40,17 @@ import chat.simplex.common.ui.theme.*
 import chat.simplex.common.views.helpers.*
 import chat.simplex.common.views.usersettings.*
 import chat.simplex.common.platform.*
+import chat.simplex.common.export.HtmlExporter
+import chat.simplex.common.export.File // Import the expect File
+import chat.simplex.common.export.filesDir // Import the expect filesDir
+import chat.simplex.common.export.separator // Import the expect separator
 import chat.simplex.common.views.chat.group.ChatTTLSection
 import chat.simplex.common.views.chatlist.updateChatSettings
 import chat.simplex.common.views.database.*
 import chat.simplex.common.views.newchat.*
 import chat.simplex.res.MR
 import kotlinx.coroutines.*
+import chat.simplex.common.views.chat.ExportChatDialog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -542,6 +547,9 @@ fun ChatInfoLayout(
   onSearchClicked: () -> Unit,
   deletingItems: State<Boolean>
 ) {
+  var showExportDialog by remember { mutableStateOf(false) }
+  val isExporting = remember { mutableStateOf(false) }
+  val exportProgressMessage = remember { mutableStateOf("") }
   val cStats = connStats.value
   val scrollState = rememberScrollState()
   val scope = rememberCoroutineScope()
@@ -674,7 +682,77 @@ fun ChatInfoLayout(
 
     SectionView {
       ClearChatButton(clearChat)
+      SettingsActionItem(
+        painterResource(MR.images.ic_save_alt), // Replace with a suitable icon
+        stringResource(MR.strings.export_chat_history), // Add this string resource
+        click = { showExportDialog = true }
+      )
       DeleteContactButton(deleteContact)
+    }
+
+    if (showExportDialog) {
+      ExportChatDialog(
+        onConfirm = { startDate, endDate ->
+          isExporting.value = true
+          exportProgressMessage.value = "Starting export..." // Initial message
+          scope.launch {
+            try {
+              exportProgressMessage.value = "Fetching messages and media info..."
+              val historyResult = chatModel.controller.exportChatHistory(chat.id, startDate, endDate)
+              val messages = historyResult.first
+              val mediaFilesToExport = historyResult.second
+
+              exportProgressMessage.value = "Generating HTML report..."
+              val htmlReport = HtmlExporter.generateHtmlReport(
+                  chatName = chat.chatInfo.displayName,
+                  startDate = startDate,
+                  endDate = endDate,
+                  messages = messages,
+                  mediaFiles = mediaFilesToExport
+              )
+              println("HTML Report (first 500 chars): ${htmlReport.take(500)}")
+
+              exportProgressMessage.value = "Saving files..."
+              val simulatedTargetDirectoryPath = filesDir.absolutePath + separator + "chat_exports"
+              val exportDir = File(simulatedTargetDirectoryPath)
+              if (!exportDir.exists()) {
+                  exportDir.mkdirs()
+              }
+
+              val saveSuccess = HtmlExporter.saveExportedData(
+                  targetDirectoryPath = simulatedTargetDirectoryPath,
+                  htmlContent = htmlReport,
+                  mediaFiles = mediaFilesToExport,
+                  chatName = chat.chatInfo.displayName
+              )
+
+              if (saveSuccess) {
+                  showToast("Export complete: chat_exports")
+                  showExportDialog.value = false // Dismiss dialog on success
+              } else {
+                  showToast("Error saving export.")
+                  // Keep dialog open for user to retry or cancel
+              }
+            } catch (e: Exception) {
+                println("Export failed: ${e.message}")
+                e.printStackTrace()
+                showToast("Export failed. Please try again.")
+                // Keep dialog open
+            } finally {
+                isExporting.value = false
+                exportProgressMessage.value = "" // Clear progress message
+            }
+          }
+          // showExportDialog = false // Moved to success case
+        },
+        onCancel = {
+          if (!isExporting.value) { // Only allow cancel if not exporting
+            showExportDialog.value = false
+          }
+        },
+        isExporting = isExporting.value,
+        exportProgressMessage = exportProgressMessage.value
+      )
     }
 
     if (developerTools) {

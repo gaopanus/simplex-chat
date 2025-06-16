@@ -3424,6 +3424,7 @@ sealed class CC {
   class ResetAgentServersStats(): CC()
   class GetAgentSubsTotal(val userId: Long): CC()
   class GetAgentServersSummary(val userId: Long): CC()
+  class ApiGetMessagesInRange(val chatId: String, val startDate: String, val endDate: String, val pagination: ChatPagination): CC()
 
   val cmdString: String get() = when (this) {
     is Console -> cmd
@@ -3614,6 +3615,7 @@ sealed class CC {
     is ResetAgentServersStats -> "/reset servers stats"
     is GetAgentSubsTotal -> "/get subs total $userId"
     is GetAgentServersSummary -> "/get servers summary $userId"
+    is ApiGetMessagesInRange -> "/_get messages_in_range $chatId from=$startDate to=$endDate ${pagination.cmdString}"
   }
 
   val cmdType: String get() = when (this) {
@@ -3770,6 +3772,7 @@ sealed class CC {
     is ResetAgentServersStats -> "resetAgentServersStats"
     is GetAgentSubsTotal -> "getAgentSubsTotal"
     is GetAgentServersSummary -> "getAgentServersSummary"
+    is ApiGetMessagesInRange -> "apiGetMessagesInRange"
   }
 
   data class ItemRange(val from: Long, val to: Long)
@@ -5894,6 +5897,7 @@ sealed class CR {
   @Serializable @SerialName("appSettings") class AppSettingsR(val appSettings: AppSettings): CR()
   @Serializable @SerialName("agentSubsTotal") class AgentSubsTotal(val user: UserRef, val subsTotal: SMPServerSubs, val hasSession: Boolean): CR()
   @Serializable @SerialName("agentServersSummary") class AgentServersSummary(val user: UserRef, val serversSummary: PresentedServersSummary): CR()
+  @Serializable @SerialName("apiMessagesInRange") class ApiMessagesInRange(val user: UserRef, val chatItems: List<AChatItem>, val hasMore: Boolean): CR()
   // general
   @Serializable class Response(val type: String, val json: String): CR()
   @Serializable class Invalid(val str: String): CR()
@@ -6058,6 +6062,7 @@ sealed class CR {
     is VersionInfo -> "versionInfo"
     is AgentSubsTotal -> "agentSubsTotal"
     is AgentServersSummary -> "agentServersSummary"
+    is ApiMessagesInRange -> "apiMessagesInRange"
     is CmdOk -> "cmdOk"
     is ArchiveExported -> "archiveExported"
     is ArchiveImported -> "archiveImported"
@@ -6240,6 +6245,7 @@ sealed class CR {
     is ContactPQEnabled -> withUser(user, "contact: ${contact.id}\npqEnabled: $pqEnabled")
     is AgentSubsTotal -> withUser(user, "subsTotal: ${subsTotal}\nhasSession: $hasSession")
     is AgentServersSummary -> withUser(user, json.encodeToString(serversSummary))
+    is ApiMessagesInRange -> withUser(user, "chatItems count: ${chatItems.size}\nhasMore: $hasMore")
     is VersionInfo -> "version ${json.encodeToString(versionInfo)}\n\n" +
         "chat migrations: ${json.encodeToString(chatMigrations.map { it.upName })}\n\n" +
         "agent migrations: ${json.encodeToString(agentMigrations.map { it.upName })}"
