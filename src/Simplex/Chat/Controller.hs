@@ -92,6 +92,8 @@ import Simplex.Messaging.Transport.Client (SocksProxyWithAuth, TransportHost)
 import Simplex.Messaging.Util (allFinally, catchAllErrors, catchAllErrors', tryAllErrors, tryAllErrors', (<$$>))
 import Simplex.RemoteControl.Client
 import Simplex.RemoteControl.Invitation (RCSignedInvitation, RCVerifiedInvitation)
+import qualified Data.HashMap.Strict as HM
+import GHC.Generics (Generic)
 import Simplex.RemoteControl.Types
 import System.IO (Handle)
 import System.Mem.Weak (Weak)
@@ -544,6 +546,7 @@ data ChatCommand
   | APIUploadStandaloneFile UserId CryptoFile
   | APIDownloadStandaloneFile UserId FileDescriptionURI CryptoFile
   | APIStandaloneFileInfo FileDescriptionURI
+  | APIGetMessagesInRange GetMessagesInRangeRequest -- New command for getting messages in range
   | QuitChat
   | ShowVersion
   | DebugLocks
@@ -683,6 +686,7 @@ data ChatResponse
   | CRRcvFileAcceptedSndCancelled {user :: User, rcvFileTransfer :: RcvFileTransfer}
   | CRStandaloneFileInfo {fileMeta :: Maybe J.Value}
   | CRRcvStandaloneFileCreated {user :: User, rcvFileTransfer :: RcvFileTransfer} -- returned by _download
+  | CRMessagesInRange GetMessagesInRangeResponse -- New response for messages in range
   | CRRcvFileCancelled {user :: User, chatItem_ :: Maybe AChatItem, rcvFileTransfer :: RcvFileTransfer}
   | CRSndFileCancelled {user :: User, chatItem_ :: Maybe AChatItem, fileTransferMeta :: FileTransferMeta, sndFileTransfers :: [SndFileTransfer]}
   | CRSndStandaloneFileCreated {user :: User, fileTransferMeta :: FileTransferMeta} -- returned by _upload
@@ -734,6 +738,34 @@ data ChatResponse
   | CRAppSettings {appSettings :: AppSettings}
   | CRCustomChatResponse {user_ :: Maybe User, response :: Text}
   deriving (Show)
+
+-- Request type for getting messages in a range
+data GetMessagesInRangeRequest = GetMessagesInRangeRequest
+  { chat_ref :: ChatRef
+  , pagination :: ChatPagination
+  } deriving (Show, Generic)
+
+instance FromJSON GetMessagesInRangeRequest
+
+-- Wrapper for AChatItem to include download URL
+data AChatItemWithDownloadUrl = AChatItemWithDownloadUrl
+  { item :: J.Value
+  , file_download_url :: Maybe Text
+  } deriving (Show, Generic)
+
+instance ToJSON AChatItemWithDownloadUrl where
+  toJSON aciwdu =
+    case item aciwdu of
+      J.Object o -> J.Object $ HM.insert "file_download_url" (J.toJSON (file_download_url aciwdu)) o
+      val -> J.Object $ HM.fromList [("item", val), ("file_download_url", J.toJSON (file_download_url aciwdu))] -- Fallback if item is not an object
+
+-- Response type for messages in a range
+data GetMessagesInRangeResponse = GetMessagesInRangeResponse
+  { messages :: [AChatItemWithDownloadUrl] -- Changed from [AChatItem]
+  , nav_info :: Maybe NavigationInfo
+  } deriving (Show, Generic)
+
+instance ToJSON GetMessagesInRangeResponse
 
 data ChatEvent
   = CEvtChatSuspended
@@ -1684,6 +1716,9 @@ $(JQ.deriveJSON (sumTypeJSON $ dropPrefix "RHSR") ''RemoteHostStopReason)
 $(JQ.deriveJSON (sumTypeJSON $ dropPrefix "TE") ''TerminalEvent)
 
 $(JQ.deriveJSON (sumTypeJSON $ dropPrefix "CR") ''ChatResponse)
+
+$(JQ.deriveJSON defaultJSON ''GetMessagesInRangeRequest)
+$(JQ.deriveJSON defaultJSON ''GetMessagesInRangeResponse)
 
 $(JQ.deriveJSON (sumTypeJSON $ dropPrefix "CEvt") ''ChatEvent)
 

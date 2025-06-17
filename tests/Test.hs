@@ -20,6 +20,7 @@ import RandomServers
 import RemoteTests
 import Test.Hspec hiding (it)
 import UnliftIO.Temporary (withTempDirectory)
+import APITests (apiTests)
 import ValidNames
 import ViewTests
 #if defined(dbPostgres)
@@ -74,6 +75,7 @@ main = do
 #if !defined(dbPostgres)
           xdescribe'' "Save query plans" saveQueryPlans
 #endif
+          describe "Simplex API tests" apiTests
   where
 #if defined(dbPostgres)
     testBracket test = withSmpServer $ tmpBracket $ \tmpPath -> test TestParams {tmpPath, printOutput = False}

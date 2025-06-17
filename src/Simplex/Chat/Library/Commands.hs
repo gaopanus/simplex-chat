@@ -74,7 +74,8 @@ import Simplex.Chat.Store.Connections
 import Simplex.Chat.Store.Direct
 import Simplex.Chat.Store.Files
 import Simplex.Chat.Store.Groups
-import Simplex.Chat.Store.Messages
+import Simplex.Chat.Store.Messages hiding (chatItems)
+import qualified Simplex.Chat.Store.Messages as StoreMessages (chatItems)
 import Simplex.Chat.Store.NoteFolders
 import Simplex.Chat.Store.Profiles
 import Simplex.Chat.Store.Shared
@@ -2534,6 +2535,44 @@ processChatCommand' vr = \case
   APIDownloadStandaloneFile userId uri file -> withUserId userId $ \user -> do
     ft <- receiveViaURI user uri file
     pure $ CRRcvStandaloneFileCreated user ft
+      APIGetMessagesInRange GetMessagesInRangeRequest {chat_ref, pagination} -> do
+        cc <- ask
+        user <- getActiveUser vr
+        (rawItems, navInfo) <- case chat_ref of
+          ChatRef CTDirect contactId -> do
+            (chat, nav) <- getDirectChat (chatStore cc) vr user contactId pagination Nothing
+            pure (StoreMessages.chatItems chat, nav)
+          ChatRef CTGroup groupId -> do
+            (chat, nav) <- getGroupChat (chatStore cc) vr user groupId Nothing pagination Nothing
+            pure (StoreMessages.chatItems chat, nav)
+          ChatRef CTLocal noteFolderId -> do
+            (chat, nav) <- getLocalChat (chatStore cc) user noteFolderId pagination Nothing
+            pure (StoreMessages.chatItems chat, nav)
+          _ -> throwChatError $ CECommandError "Unsupported chat type for APIGetMessagesInRange"
+
+        processedItems <- forM rawItems $ \aci@(AChatItem scType _ _ chatItem) -> do
+          let originalJson = J.toJSON aci
+              itemId = chatItemId' chatItem
+              mFile = Simplex.Chat.Messages.file chatItem -- Accessing file field from ChatItem
+
+          downloadUrl <- case mFile of
+            Just ciFile -> do
+              let fileId = Simplex.Chat.Messages.CIContent.fileId ciFile
+                  chatTypeStr = case scType of
+                    SCTDirect -> "direct"
+                    SCTGroup -> "group"
+                    SCTLocal -> "local"
+                    _ -> "unknown" -- Should ideally not happen or be handled
+
+                  (ChatRef _ chatRefIdVal) = chat_ref -- chat_ref is in scope from GetMessagesInRangeRequest
+
+              pure $ Just $ T.pack $
+                "/api/v1/download_file/" <> chatTypeStr <> "/" <> show chatRefIdVal <> "/" <> show itemId <> "/" <> show fileId
+            Nothing -> pure Nothing
+
+          pure $ AChatItemWithDownloadUrl originalJson downloadUrl
+
+        pure $ CRMessagesInRange $ GetMessagesInRangeResponse processedItems navInfo
   QuitChat -> liftIO exitSuccess
   ShowVersion -> do
     -- simplexmqCommitQ makes iOS builds crash m(
