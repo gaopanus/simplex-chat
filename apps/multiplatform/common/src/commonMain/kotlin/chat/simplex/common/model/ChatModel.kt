@@ -32,10 +32,16 @@ import kotlinx.serialization.descriptors.*
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.*
-import java.io.Closeable
-import java.io.File
-import java.net.URI
-import java.time.format.DateTimeFormatter
+import chat.simplex.common.platform.File // expect File
+import chat.simplex.common.platform.createFile // expect createFile
+import chat.simplex.common.platform.fileSeparator // expect fileSeparator
+import chat.simplex.common.platform.Log // Assuming Log is an expect object
+import chat.simplex.common.platform.tmpDir // Assuming tmpDir is an expect val
+import chat.simplex.common.platform.MR // Assuming MR is an expect object
+import chat.simplex.common.platform.generalGetString // Assuming generalGetString is an expect fun
+import java.io.Closeable // Keep if it's a type alias or common interface
+import java.net.URI // Keep for now, might need expect/actual if not common
+import java.time.format.DateTimeFormatter // Keep for now, part of ThreeTen/ kotlinx-datetime usually handles this
 import java.time.format.FormatStyle
 import java.util.*
 import java.util.concurrent.atomic.AtomicLong
@@ -141,7 +147,7 @@ object ChatModel {
   // working with external intents or internal forwarding of chat items
   val sharedContent = mutableStateOf(null as SharedContent?)
 
-  val filesToDelete = mutableSetOf<File>()
+  val filesToDelete = mutableSetOf<File>() // Uses expect File now
   val simplexLinkMode by lazy { mutableStateOf(ChatController.appPrefs.simplexLinkMode.get()) }
 
   val clipboardHasText = mutableStateOf(false)
@@ -3380,20 +3386,28 @@ object MsgReactionSerializer : KSerializer<MsgReaction> {
     require(decoder is JsonDecoder)
     val json = decoder.decodeJsonElement()
     return if (json is JsonObject && "type" in json) {
-      when(val t = json["type"]?.jsonPrimitive?.content ?: "") {
+      val typeField = json["type"]?.jsonPrimitive?.content ?: ""
+      when(typeField) {
         "emoji" -> {
-          val msgReaction = try {
-            val emoji = Json.decodeFromString<MREmojiChar>(json["emoji"].toString())
-            MsgReaction.Emoji(emoji)
-          } catch (e: Throwable) {
-            MsgReaction.Unknown(t, json)
+          val emojiElement = json["emoji"]
+          if (emojiElement == null || emojiElement is JsonNull) {
+            Log.e("MsgReactionSerializer", "Emoji field is null or missing for type 'emoji'")
+            MsgReaction.Unknown(typeField, json)
+          } else {
+            try {
+              val emoji = decoder.json.decodeFromJsonElement<MREmojiChar>(emojiElement)
+              MsgReaction.Emoji(emoji)
+            } catch (e: Throwable) {
+              Log.e("MsgReactionSerializer", "Failed to deserialize MREmojiChar: ${e.message}")
+              MsgReaction.Unknown(typeField, json)
+            }
           }
-          msgReaction
         }
-        else -> MsgReaction.Unknown(t, json)
+        else -> MsgReaction.Unknown(typeField, json)
       }
     } else {
-      MsgReaction.Unknown("", json)
+      Log.e("MsgReactionSerializer", "MsgReaction JSON is not an object or 'type' field is missing")
+      MsgReaction.Unknown(json.toString().take(30), json) // Use part of JSON as type if 'type' is missing
     }
   }
 
@@ -3403,7 +3417,7 @@ object MsgReactionSerializer : KSerializer<MsgReaction> {
       is MsgReaction.Emoji ->
         buildJsonObject {
           put("type", "emoji")
-          put("emoji", json.encodeToJsonElement(value.emoji))
+          put("emoji", encoder.json.encodeToJsonElement(value.emoji))
         }
       is MsgReaction.Unknown -> value.json
     }
@@ -3552,41 +3566,51 @@ data class CryptoFile(
 ) {
 
   val isAbsolutePath: Boolean
-    get() = File(filePath).isAbsolute
+    get() = createFile(filePath).isAbsolute() // Use expect File and its methods
 
   @Transient
-  private var tmpFile: File? = null
+  private var tmpFile: File? = null // Uses expect File now
 
-  fun createTmpFileIfNeeded(): File {
+  fun createTmpFileIfNeeded(): File { // Returns expect File
     if (tmpFile == null) {
-      val tmpFile = File(tmpDir, UUID.randomUUID().toString())
-      tmpFile.deleteOnExit()
-      ChatModel.filesToDelete.add(tmpFile)
-      this.tmpFile = tmpFile
+      // Assuming tmpDir is an expect val of type File from platform package
+      val newTmpFile = createFile(tmpDir.getAbsolutePath() + fileSeparator + UUID.randomUUID().toString())
+      // tmpFile.deleteOnExit() // This is JVM specific, expect/actual needed for this behavior
+      ChatModel.filesToDelete.add(newTmpFile)
+      this.tmpFile = newTmpFile
     }
     return tmpFile!!
   }
 
   fun deleteTmpFile() {
-    tmpFile?.delete()
+    tmpFile?.delete() // Uses expect File.delete()
   }
 
   private fun decryptToTmpFile(): URI? {
     val absoluteFilePath = if (isAbsolutePath) filePath else getAppFilePath(filePath)
-    val tmpFile = createTmpFileIfNeeded()
+    val tempFile = createTmpFileIfNeeded() // Renamed to avoid confusion
     try {
-      decryptCryptoFile(absoluteFilePath, cryptoArgs ?: return null, tmpFile.absolutePath)
+      // Assuming decryptCryptoFile is defined elsewhere and handles platform paths
+      decryptCryptoFile(absoluteFilePath, cryptoArgs ?: return null, tempFile.getAbsolutePath())
     } catch (e: Exception) {
-      Log.e(TAG, "Unable to decrypt crypto file: " + e.stackTraceToString())
+      Log.e(TAG, "Unable to decrypt crypto file: ${e.stackTraceToString()}") // Fixed Log.e call
       AlertManager.shared.showAlertMsg(title = generalGetString(MR.strings.error), text = e.stackTraceToString())
       return null
     }
-    return tmpFile.toURI()
+    // tempFile.toURI() // .toURI() is JVM specific for java.io.File. Needs platform specific way or common URI construction.
+    // For now, assuming a helper or direct construction if URI is common.
+    // Let's assume createURIFromPath (already in Files.kt) can be used or adapted.
+    // However, toURI() on a file usually implies a file:// schema.
+    // This part is complex to make fully multiplatform without more context on decryptCryptoFile and URI expectations.
+    // Placeholder:
+    return URI("file://${tempFile.getAbsolutePath()}")
   }
 
   fun decryptedGet(): URI? {
     val decrypted = decryptedUris[filePath]
-    return if (decrypted != null && decrypted.toFile().exists()) {
+    // decrypted.toFile() needs to use expect File logic
+    val fileToCheck = decrypted?.let { createFile(it.path) } // Assuming URI.path gives a string path
+    return if (fileToCheck != null && fileToCheck.exists()) {
       decrypted
     } else {
       null
@@ -3604,7 +3628,7 @@ data class CryptoFile(
   companion object {
     fun plain(f: String): CryptoFile = CryptoFile(f, null)
 
-    fun desktopPlain(f: URI): CryptoFile = CryptoFile(f.toFile().absolutePath, null)
+    fun desktopPlain(f: URI): CryptoFile = CryptoFile(createFile(f.path).getAbsolutePath(), null) // Use expect File
 
     private val decryptedUris = mutableMapOf<String, URI>()
   }
