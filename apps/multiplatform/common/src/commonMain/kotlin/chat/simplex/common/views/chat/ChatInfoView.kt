@@ -42,8 +42,10 @@ import chat.simplex.common.views.usersettings.*
 import chat.simplex.common.platform.*
 import chat.simplex.common.export.HtmlExporter
 import chat.simplex.common.export.File // Import the expect File
-import chat.simplex.common.export.filesDir // Import the expect filesDir
-import chat.simplex.common.export.separator // Import the expect separator
+import chat.simplex.common.export.filesDir
+import chat.simplex.common.export.separator
+import chat.simplex.common.views.chat.export.NavController // Import NavController
+import chat.simplex.common.views.chat.export.DummyNavController // Import DummyNavController
 import chat.simplex.common.views.chat.group.ChatTTLSection
 import chat.simplex.common.views.chatlist.updateChatSettings
 import chat.simplex.common.views.database.*
@@ -68,7 +70,8 @@ fun ChatInfoView(
   localAlias: String,
   connectionCode: String?,
   close: () -> Unit,
-  onSearchClicked: () -> Unit
+  onSearchClicked: () -> Unit,
+  navController: NavController // Added navController parameter
 ) {
   BackHandler(onBack = close)
   val contact = rememberUpdatedState(contact).value
@@ -545,11 +548,12 @@ fun ChatInfoLayout(
   verifyClicked: () -> Unit,
   close: () -> Unit,
   onSearchClicked: () -> Unit,
-  deletingItems: State<Boolean>
+  deletingItems: State<Boolean>,
+  navController: NavController // Added navController parameter
 ) {
-  var showExportDialog by remember { mutableStateOf(false) }
-  val isExporting = remember { mutableStateOf(false) }
-  val exportProgressMessage = remember { mutableStateOf("") }
+  // Removed: var showExportDialog by remember { mutableStateOf(false) }
+  // Removed: val isExporting = remember { mutableStateOf(false) }
+  // Removed: val exportProgressMessage = remember { mutableStateOf("") }
   val cStats = connStats.value
   val scrollState = rememberScrollState()
   val scope = rememberCoroutineScope()
@@ -683,77 +687,16 @@ fun ChatInfoLayout(
     SectionView {
       ClearChatButton(clearChat)
       SettingsActionItem(
-        painterResource(MR.images.ic_save_alt), // Replace with a suitable icon
-        stringResource(MR.strings.export_chat_history), // Add this string resource
-        click = { showExportDialog = true }
+        painterResource(MR.images.ic_save_alt),
+        stringResource(MR.strings.export_chat_history),
+        click = {
+            navController.navigate(NavRoutes.groupExport(chat.id))
+        }
       )
       DeleteContactButton(deleteContact)
     }
 
-    if (showExportDialog) {
-      ExportChatDialog(
-        onConfirm = { startDate, endDate ->
-          isExporting.value = true
-          exportProgressMessage.value = "Starting export..." // Initial message
-          scope.launch {
-            try {
-              exportProgressMessage.value = "Fetching messages and media info..."
-              val historyResult = chatModel.controller.exportChatHistory(chat.id, startDate, endDate)
-              val messages = historyResult.first
-              val mediaFilesToExport = historyResult.second
-
-              exportProgressMessage.value = "Generating HTML report..."
-              val htmlReport = HtmlExporter.generateHtmlReport(
-                  chatName = chat.chatInfo.displayName,
-                  startDate = startDate,
-                  endDate = endDate,
-                  messages = messages,
-                  mediaFiles = mediaFilesToExport
-              )
-              println("HTML Report (first 500 chars): ${htmlReport.take(500)}")
-
-              exportProgressMessage.value = "Saving files..."
-              val simulatedTargetDirectoryPath = filesDir.absolutePath + separator + "chat_exports"
-              val exportDir = File(simulatedTargetDirectoryPath)
-              if (!exportDir.exists()) {
-                  exportDir.mkdirs()
-              }
-
-              val saveSuccess = HtmlExporter.saveExportedData(
-                  targetDirectoryPath = simulatedTargetDirectoryPath,
-                  htmlContent = htmlReport,
-                  mediaFiles = mediaFilesToExport,
-                  chatName = chat.chatInfo.displayName
-              )
-
-              if (saveSuccess) {
-                  showToast("Export complete: chat_exports")
-                  showExportDialog.value = false // Dismiss dialog on success
-              } else {
-                  showToast("Error saving export.")
-                  // Keep dialog open for user to retry or cancel
-              }
-            } catch (e: Exception) {
-                println("Export failed: ${e.message}")
-                e.printStackTrace()
-                showToast("Export failed. Please try again.")
-                // Keep dialog open
-            } finally {
-                isExporting.value = false
-                exportProgressMessage.value = "" // Clear progress message
-            }
-          }
-          // showExportDialog = false // Moved to success case
-        },
-        onCancel = {
-          if (!isExporting.value) { // Only allow cancel if not exporting
-            showExportDialog.value = false
-          }
-        },
-        isExporting = isExporting.value,
-        exportProgressMessage = exportProgressMessage.value
-      )
-    }
+    // Removed ExportChatDialog block
 
     if (developerTools) {
       SectionDividerSpaced()
@@ -1520,7 +1463,14 @@ fun PreviewChatInfoLayout() {
       verifyClicked = {},
       close = {},
       onSearchClicked = {},
-      deletingItems = remember { mutableStateOf(false) }
+      deletingItems = remember { mutableStateOf(false) },
+      navController = DummyNavController {} // Added for preview
     )
   }
+}
+
+object NavRoutes {
+    const val GROUP_EXPORT_ROUTE_PREFIX = "groupExport"
+    // const val GROUP_EXPORT = "$GROUP_EXPORT_ROUTE_PREFIX/{chatId}" // Not needed if using the helper
+    fun groupExport(chatId: String) = "$GROUP_EXPORT_ROUTE_PREFIX/$chatId"
 }

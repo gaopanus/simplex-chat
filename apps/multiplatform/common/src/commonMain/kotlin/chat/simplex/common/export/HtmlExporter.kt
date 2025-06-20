@@ -5,6 +5,7 @@ import chat.simplex.common.model.MediaToExport
 import chat.simplex.common.model.CIDirection
 import chat.simplex.common.model.MsgContent
 import chat.simplex.common.platform.format
+import chat.simplex.common.platform.File // Added import for platform File
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -165,24 +166,3 @@ object HtmlExporter {
         }
     }
 }
-
-// Expect/actual for File might be needed if commonMain doesn't have java.io.File
-// For now, assuming it's available or will be handled by platform-specific parts later.
-expect class File(pathname: String) {
-    constructor(parent: File?, child: String)
-    constructor(parent: String, child: String)
-
-    val name: String
-    val path: String
-    val absolutePath: String
-    val parent: String?
-    fun exists(): Boolean
-    fun mkdirs(): Boolean
-    fun writeText(text: String)
-    fun copyTo(target: File, overwrite: Boolean = false): File
-    fun isDirectory(): Boolean
-    fun listFiles(): Array<File>?
-}
-
-expect val filesDir: File // To be provided by platform-specific code (e.g., Android context.filesDir)
-expect val File.separator: String

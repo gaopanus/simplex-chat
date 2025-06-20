@@ -2632,4 +2632,22 @@
   <string name="export_start_date">Start Date</string>
   <string name="export_end_date">End Date</string>
   <string name="exporting_button">Exporting…</string>
+
+  <!-- GroupExportView strings -->
+  <string name="export_section_date_range">Date Range</string>
+  <string name="export_label_start_date">Start Date (YYYY-MM-DD)</string>
+  <string name="export_label_end_date">End Date (YYYY-MM-DD)</string>
+  <string name="export_section_location">Export Location</string>
+  <string name="export_label_folder_path">Export Folder Path</string>
+  <string name="export_path_note">Note: Ensure this path is valid. Folder picker coming soon.</string>
+  <string name="export_button_start">Start Export</string>
+
+  <!-- Export Progress/Feedback -->
+  <string name="export_progress_starting">Starting export…</string>
+  <string name="export_progress_fetching">Fetching messages…</string>
+  <string name="export_progress_generating_html">Generating HTML report…</string>
+  <string name="export_progress_saving">Saving files…</string>
+  <string name="export_complete_message">Export complete! Saved to %1$s</string>
+  <string name="export_failed_saving">Export failed during saving.</string>
+  <string name="export_failed_generic">Export failed: %1$s</string>
 </resources>

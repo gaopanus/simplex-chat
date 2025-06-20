@@ -24,6 +24,8 @@ expect val dbAbsolutePrefixPath: String
 expect val preferencesDir: File
 expect val preferencesTmpDir: File
 
+expect val separator: String // Added expect for File.separator
+
 expect val chatDatabaseFileName: String
 expect val agentDatabaseFileName: String
 
@@ -188,3 +190,28 @@ expect class FileChooserMultipleLauncher() {
 
 expect fun URI.inputStream(): InputStream?
 expect fun URI.outputStream(): OutputStream
+
+// Added expect class File here
+expect class File(pathname: String) {
+    constructor(parent: File?, child: String)
+    constructor(parent: String, child: String)
+
+    val name: String
+    val path: String
+    val absolutePath: String
+    val parent: String?
+    val parentFile: File? // Added to match common usage
+    fun exists(): Boolean
+    fun mkdirs(): Boolean
+    fun writeText(text: String)
+    fun copyTo(target: File, overwrite: Boolean = false): File
+    fun isDirectory(): Boolean
+    fun listFiles(): Array<File>?
+    fun length(): Long
+    fun delete(): Boolean
+    fun deleteOnExit() // Added as it's common
+    fun absoluteFile(): File // Added as it's common
+    fun getCanonicalPath(): String // Added as it's common
+    // Add other java.io.File methods as needed for common code,
+    // or ensure they are only called in platform-specific modules.
+}
