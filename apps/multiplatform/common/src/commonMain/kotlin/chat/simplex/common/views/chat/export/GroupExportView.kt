@@ -14,18 +14,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import chat.simplex.common.model.Chat
-import chat.simplex.common.model.ChatInfo // Added import
+import chat.simplex.common.model.ChatInfo
 import chat.simplex.common.model.ChatModel
 import chat.simplex.common.export.HtmlExporter
 import chat.simplex.common.platform.File
 import chat.simplex.common.platform.filesDir
 import chat.simplex.common.platform.separator
 import chat.simplex.common.platform.NavController
-import chat.simplex.common.platform.DummyNavController
+import chat.simplex.common.platform.DummyNavController // Keep if used, or remove if NavController is concrete
 import chat.simplex.common.platform.ColumnWithScrollBar
 import chat.simplex.common.platform.Log
-import chat.simplex.common.util.parseDateString // Import parseDateString
-// import chat.simplex.common.platform.showToast // showToast might be platform specific, using AlertManager
+import chat.simplex.common.util.parseDateString
 import chat.simplex.common.views.helpers.AlertManager
 import chat.simplex.common.views.helpers.DefaultTopAppBar
 import chat.simplex.common.views.helpers.ModalView
@@ -35,12 +34,13 @@ import dev.icerock.moko.resources.compose.stringResource
 import chat.simplex.res.MR
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.datetime.toLocalDate // Ensure this is imported for comparison if needed, though parseDateString returns LocalDate
 
 @Composable
 fun GroupExportView(
     chatModel: ChatModel,
     chat: Chat,
-    navController: NavController, // Using the imported NavController
+    navController: NavController,
     close: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -52,7 +52,7 @@ fun GroupExportView(
     val progressFetchingMsg = stringResource(MR.strings.export_progress_fetching)
     val progressGeneratingHtmlMsg = stringResource(MR.strings.export_progress_generating_html)
     val progressSavingMsg = stringResource(MR.strings.export_progress_saving)
-    val exportCompleteTitle = stringResource(MR.strings.export_chat_history_title)
+    val exportCompleteTitle = stringResource(MR.strings.export_chat_history_title) // Used for success as well
     val exportCompleteMsgPattern = stringResource(MR.strings.export_complete_message)
     val exportFailedSavingTitle = stringResource(MR.strings.error_alert_title)
     val exportFailedSavingMsg = stringResource(MR.strings.export_failed_saving)
@@ -73,6 +73,9 @@ fun GroupExportView(
     val initialExportPath = try {
         filesDir.absolutePath + separator + "chat_exports"
     } catch (e: Exception) {
+        // Fallback for environments where filesDir might not be immediately available or fails
+        // This is more a safeguard for preview/testing, actual device should have filesDir
+        Log.w("GroupExportView", "Failed to get filesDir: ${e.message}. Using fallback path.")
         "/tmp/chat_exports"
     }
     val exportFolderPath = rememberSaveable { mutableStateOf(initialExportPath) }
@@ -82,7 +85,7 @@ fun GroupExportView(
         close = { if (!isExporting.value) close() },
         appBar = {
             DefaultTopAppBar(
-                title = { Text(exportCompleteTitle) }, // Using pre-resolved for consistency, though direct is fine here
+                title = { Text(stringResource(MR.strings.export_chat_history_title)) },
                 navigationIcon = {
                     IconButton(onClick = { if (!isExporting.value) close() }) {
                         Icon(
@@ -97,15 +100,16 @@ fun GroupExportView(
         content = { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
                 ColumnWithScrollBar(
-                     modifier = Modifier.fillMaxSize() // Fill the box
+                     modifier = Modifier.fillMaxSize()
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) { // Content padding
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Text(stringResource(MR.strings.export_section_date_range), style = MaterialTheme.typography.subtitle1)
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
                             value = startDate.value,
                             onValueChange = { startDate.value = it },
                             label = { Text(stringResource(MR.strings.export_label_start_date)) },
+                            placeholder = { Text(stringResource(MR.strings.export_date_hint_yyyy_mm_dd)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !isExporting.value
@@ -115,6 +119,7 @@ fun GroupExportView(
                             value = endDate.value,
                             onValueChange = { endDate.value = it },
                             label = { Text(stringResource(MR.strings.export_label_end_date)) },
+                            placeholder = { Text(stringResource(MR.strings.export_date_hint_yyyy_mm_dd)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !isExporting.value
@@ -142,20 +147,51 @@ fun GroupExportView(
                             buttonText = stringResource(MR.strings.export_button_start),
                             disabled = isExporting.value,
                             click = {
+                                val startDateStr = startDate.value
+                                val endDateStr = endDate.value
+
+                                val parsedStartDateLocal = parseDateString(startDateStr)
+                                val parsedEndDateLocal = parseDateString(endDateStr)
+
+                                if (startDateStr.isNotBlank() && parsedStartDateLocal == null) {
+                                    AlertManager.shared.showAlertMsg(
+                                        title = invalidStartDateTitle,
+                                        text = invalidDateFormatDetails
+                                    )
+                                    return@SimpleButton
+                                }
+
+                                if (endDateStr.isNotBlank() && parsedEndDateLocal == null) {
+                                    AlertManager.shared.showAlertMsg(
+                                        title = invalidEndDateTitle,
+                                        text = invalidDateFormatDetails
+                                    )
+                                    return@SimpleButton
+                                }
+
+                                if (parsedStartDateLocal != null && parsedEndDateLocal != null && parsedStartDateLocal > parsedEndDateLocal) {
+                                    AlertManager.shared.showAlertMsg(
+                                        title = invalidDateRangeTitle,
+                                        text = startAfterEndDateDetails
+                                    )
+                                    return@SimpleButton
+                                }
+
                                 isExporting.value = true
                                 exportProgressMessage.value = progressStartingMsg
                                 scope.launch(Dispatchers.Default) {
                                     try {
                                         exportProgressMessage.value = progressFetchingMsg
-                                        val (messagesFromController, mediaFilesToExport) = chatModel.controller.exportChatHistory(chat.id, startDate.value, endDate.value)
-                                        val messagesForReport = messagesFromController.asReversed() // Reverse for oldest-first display
+                                        // Pass original string dates to the controller
+                                        val (messagesFromController, mediaFilesToExport) = chatModel.controller.exportChatHistory(chat.id, startDateStr, endDateStr)
+                                        val messagesForReport = messagesFromController.asReversed()
 
                                         exportProgressMessage.value = progressGeneratingHtmlMsg
                                         val htmlContent = HtmlExporter.generateHtmlReport(
-                                            chatName = chat.chatInfo.displayName, // Or a more specific name if available
-                                            startDate = startDate.value,
-                                            endDate = endDate.value,
-                                            messages = messagesForReport, // Use the reversed list
+                                            chatName = chat.chatInfo.displayName,
+                                            startDate = startDateStr,
+                                            endDate = endDateStr,
+                                            messages = messagesForReport,
                                             mediaFiles = mediaFilesToExport
                                         )
 
@@ -179,8 +215,9 @@ fun GroupExportView(
                                     } catch (e: Exception) {
                                         Log.e("GroupExportView", "Export failed: ${e.localizedMessage ?: e.toString()}", e)
                                         val errorMsgText = e.localizedMessage ?: "Unknown error"
-                                        exportProgressMessage.value = exportFailedGenericMsgPattern.format(errorMsgText)
-                                        AlertManager.shared.showAlertMsg(title = exportFailedGenericTitle, text = exportProgressMessage.value)
+                                        val formattedGenericErrorMsg = exportFailedGenericMsgPattern.format(errorMsgText)
+                                        exportProgressMessage.value = formattedGenericErrorMsg
+                                        AlertManager.shared.showAlertMsg(title = exportFailedGenericTitle, text = formattedGenericErrorMsg)
                                     } finally {
                                         isExporting.value = false
                                     }
@@ -213,3 +250,5 @@ fun GroupExportView(
         }
     )
 }
+
+[end of apps/multiplatform/common/src/commonMain/kotlin/chat/simplex/common/views/chat/export/GroupExportView.kt]

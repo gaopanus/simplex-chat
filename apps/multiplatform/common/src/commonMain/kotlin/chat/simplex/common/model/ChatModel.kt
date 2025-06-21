@@ -11,6 +11,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import chat.simplex.common.model.MsgFilter.*
 import chat.simplex.common.platform.*
 import chat.simplex.common.ui.theme.*
+import chat.simplex.common.util.parseDateString
 import chat.simplex.common.views.call.*
 import chat.simplex.common.views.chat.*
 import chat.simplex.common.views.chat.item.contentModerationPostLink
@@ -27,14 +28,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlin.collections.removeAll as remAll
 import kotlinx.datetime.*
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.*
 import kotlinx.serialization.descriptors.*
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.*
 import java.io.Closeable
-// import java.io.File // Replaced by platform.File
-import chat.simplex.common.platform.File // Use platform File
+import chat.simplex.common.platform.File
 import java.net.URI
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -71,9 +72,7 @@ object ChatModel {
   val openAroundItemId: MutableState<Long?> = mutableStateOf(null)
   val chatsContext = ChatsContext(null)
   val secondaryChatsContext = mutableStateOf<ChatsContext?>(null)
-  // declaration of chatsContext should be before any other variable that is taken from ChatsContext class and used in the model, otherwise, strange crash with NullPointerException for "this" parameter in random functions
   val chats: State<List<Chat>> = chatsContext.chats
-  // rhId, chatId
   val deletedChats = mutableStateOf<List<Pair<Long?, String>>>(emptyList())
   val groupMembers = mutableStateOf<List<GroupMember>>(emptyList())
   val groupMembersIndexes = mutableStateOf<Map<Long, Int>>(emptyMap())
@@ -85,29 +84,17 @@ object ChatModel {
   val presetTags = mutableStateMapOf<PresetTagKind, Int>()
   val unreadTags = mutableStateMapOf<Long, Int>()
 
-  // false: default placement, true: floating window.
-  // Used for deciding to add terminal items on main thread or not. Floating means appPrefs.terminalAlwaysVisible
   var terminalsVisible = setOf<Boolean>()
   val terminalItems = mutableStateOf<List<TerminalItem>>(listOf())
   val userAddress = mutableStateOf<UserContactLinkRec?>(null)
   val chatItemTTL = mutableStateOf<ChatItemTTL>(ChatItemTTL.None)
 
-  // set when app opened from external intent
   val clearOverlays = mutableStateOf<Boolean>(false)
-
-  // Only needed during onboarding when user skipped password setup (left as random password)
   val desktopOnboardingRandomPassword = mutableStateOf(false)
-
-  // set when app is opened via contact or invitation URI (rhId, uri)
   val appOpenUrl = mutableStateOf<Pair<Long?, String>?>(null)
-
-  // Needed to check for bottom nav bar and to apply or not navigation bar color on Android
   val newChatSheetVisible = mutableStateOf(false)
-
-  // Needed to apply black color to left/right cutout area on Android
   val fullscreenGalleryVisible = mutableStateOf(false)
 
-  // preferences
   val notificationPreviewMode by lazy {
     mutableStateOf(
       try {
@@ -121,7 +108,6 @@ object ChatModel {
   val showAdvertiseLAUnavailableAlert = mutableStateOf(false)
   val showChatPreviews by lazy { mutableStateOf(ChatController.appPrefs.privacyShowChatPreviews.get()) }
 
-  // current WebRTC call
   val callManager = CallManager(this)
   val callInvitations = mutableStateMapOf<String, RcvCallInvitation>()
   val activeCallInvitation = mutableStateOf<RcvCallInvitation?>(null)
@@ -132,34 +118,23 @@ object ChatModel {
   val showCallView = mutableStateOf(false)
   val switchingCall = mutableStateOf(false)
 
-  // currently showing invitation
   val showingInvitation = mutableStateOf(null as ShowingInvitation?)
-
   val migrationState: MutableState<MigrationToState?> by lazy { mutableStateOf(MigrationToDeviceState.makeMigrationState()) }
-
   var draft = mutableStateOf(null as ComposeState?)
   var draftChatId = mutableStateOf(null as String?)
-
-  // working with external intents or internal forwarding of chat items
   val sharedContent = mutableStateOf(null as SharedContent?)
-
-  val filesToDelete = mutableSetOf<chat.simplex.common.platform.File>() // Use platform File
+  val filesToDelete = mutableSetOf<chat.simplex.common.platform.File>()
   val simplexLinkMode by lazy { mutableStateOf(ChatController.appPrefs.simplexLinkMode.get()) }
-
   val clipboardHasText = mutableStateOf(false)
   val networkInfo = mutableStateOf(UserNetworkInfo(networkType = UserNetworkType.OTHER, online = true))
-
   val conditions = mutableStateOf(ServerOperatorConditionsDetail.empty)
-
   val updatingProgress = mutableStateOf(null as Float?)
   var updatingRequest: Closeable? = null
-
   val changingActiveUserMutex: Mutex = Mutex()
 
   val desktopNoUserNoRemote: Boolean @Composable get() = appPlatform.isDesktop && currentUser.value == null && currentRemoteHost.value == null
   fun desktopNoUserNoRemote(): Boolean = appPlatform.isDesktop && currentUser.value == null && currentRemoteHost.value == null
 
-  // remote controller
   val remoteHosts = mutableStateListOf<RemoteHostInfo>()
   val currentRemoteHost = mutableStateOf<RemoteHostInfo?>(null)
   val remoteHostId: Long? @Composable get() = remember { currentRemoteHost }.value?.remoteHostId
@@ -169,8 +144,6 @@ object ChatModel {
 
   val processedCriticalError: ProcessedErrors<AgentErrorType.CRITICAL> = ProcessedErrors(60_000)
   val processedInternalError: ProcessedErrors<AgentErrorType.INTERNAL> = ProcessedErrors(20_000)
-
-  // return true if you handled the click
   var centerPanelBackgroundClickHandler: (() -> Boolean)? = null
 
   fun getUser(userId: Long): User? = if (currentUser.value?.userId == userId) {
@@ -274,7 +247,6 @@ object ChatModel {
       }
     }
   }
-  // TODO pass rhId?
   fun getChat(id: String): Chat? = chats.value.firstOrNull { it.id == id }
   fun getContactChat(contactId: Long): Chat? = chats.value.firstOrNull { it.chatInfo is ChatInfo.Direct && it.chatInfo.apiId == contactId }
   fun getGroupChat(groupId: Long): Chat? = chats.value.firstOrNull { it.chatInfo is ChatInfo.Group && it.chatInfo.apiId == groupId }
@@ -299,13 +271,8 @@ object ChatModel {
 
   class ChatsContext(val contentTag: MsgContentTag?) {
     val chats = mutableStateOf(SnapshotStateList<Chat>())
-    /** if you modify the items by adding/removing them, use helpers methods like [addToChatItems], [removeLastChatItems], [removeAllAndNotify], [clearAndNotify] and so on.
-     * If some helper is missing, create it. Notify is needed to track state of items that we added manually (not via api call). See [apiLoadMessages].
-     * If you use api call to get the items, use just [add] instead of [addToChatItems].
-     * Never modify underlying list directly because it produces unexpected results in ChatView's LazyColumn (setting by index is ok) */
     val chatItems = mutableStateOf(SnapshotStateList<ChatItem>())
     val chatItemStatuses = mutableMapOf<Long, CIStatus>()
-    // set listener here that will be notified on every add/delete of a chat item
     val chatState = ActiveChatState()
 
     fun hasChat(rhId: Long?, id: String): Boolean = chats.value.firstOrNull { it.id == id && it.remoteHostId == rhId } != null
@@ -357,9 +324,7 @@ object ChatModel {
     }
 
     suspend fun updateContactConnection(rhId: Long?, contactConnection: PendingContactConnection) = updateChat(rhId, ChatInfo.ContactConnection(contactConnection))
-
     suspend fun updateContact(rhId: Long?, contact: Contact) = updateChat(rhId, ChatInfo.Direct(contact), addMissing = contact.directOrUsed)
-
     suspend fun updateContactConnectionStats(rhId: Long?, contact: Contact, connectionStats: ConnectionStats) {
       val updatedConn = contact.activeConn?.copy(connectionStats = connectionStats)
       val updatedContact = contact.copy(activeConn = updatedConn)
@@ -367,7 +332,6 @@ object ChatModel {
     }
 
     suspend fun updateGroup(rhId: Long?, groupInfo: GroupInfo) = updateChat(rhId, ChatInfo.Group(groupInfo))
-
     private suspend fun updateChat(rhId: Long?, cInfo: ChatInfo, addMissing: Boolean = true) {
       if (hasChat(rhId, cInfo.id)) {
         updateChatInfo(rhId, cInfo)
@@ -380,9 +344,7 @@ object ChatModel {
     fun updateChats(newChats: List<Chat>) {
       chats.replaceAll(newChats)
       popChatCollector.clear()
-
       val cId = chatId.value
-      // If chat is null, it was deleted in background after apiGetChats call
       if (cId != null && getChat(cId) == null) {
         chatId.value = null
       }
@@ -393,7 +355,6 @@ object ChatModel {
       if (i >= 0) {
         chats[i] = chat
       } else {
-        // invalid state, correcting
         addChat(chat)
       }
     }
@@ -418,12 +379,10 @@ object ChatModel {
     }
 
     suspend fun addChatItem(rhId: Long?, cInfo: ChatInfo, cItem: ChatItem) {
-      // mark chat non deleted
       if (cInfo is ChatInfo.Direct && cInfo.chatDeleted) {
         val updatedContact = cInfo.contact.copy(chatDeleted = false)
         updateContact(rhId, updatedContact)
       }
-      // update previews
       val i = getChatIndex(rhId, cInfo.id)
       val chat: Chat
       if (i >= 0) {
@@ -432,42 +391,27 @@ object ChatModel {
           is ChatInfo.Group -> {
             val currentPreviewItem = chat.chatItems.firstOrNull()
             if (currentPreviewItem != null) {
-              if (cItem.meta.itemTs >= currentPreviewItem.meta.itemTs) {
-                cItem
-              } else {
-                currentPreviewItem
-              }
-            } else {
-              cItem
-            }
+              if (cItem.meta.itemTs >= currentPreviewItem.meta.itemTs) cItem else currentPreviewItem
+            } else cItem
           }
           else -> cItem
         }
         val wasUnread = chat.unreadTag
         chats[i] = chat.copy(
           chatItems = arrayListOf(newPreviewItem),
-          chatStats =
-          if (cItem.meta.itemStatus is CIStatus.RcvNew) {
+          chatStats = if (cItem.meta.itemStatus is CIStatus.RcvNew) {
             increaseUnreadCounter(rhId, currentUser.value!!)
             chat.chatStats.copy(unreadCount = chat.chatStats.unreadCount + 1, unreadMentions = if (cItem.meta.userMention) chat.chatStats.unreadMentions + 1 else chat.chatStats.unreadMentions)
-          }
-          else
-            chat.chatStats
+          } else chat.chatStats
         )
         updateChatTagReadNoContentTag(chats[i], wasUnread)
-
-        if (appPlatform.isDesktop && cItem.chatDir.sent) {
-          reorderChat(chats[i], 0)
-        } else {
-          popChatCollector.throttlePopChat(chat.remoteHostId, chat.id, currentPosition = i)
-        }
+        if (appPlatform.isDesktop && cItem.chatDir.sent) reorderChat(chats[i], 0)
+        else popChatCollector.throttlePopChat(chat.remoteHostId, chat.id, currentPosition = i)
       } else {
         addChat(Chat(remoteHostId = rhId, chatInfo = cInfo, chatItems = arrayListOf(cItem)))
       }
       withContext(Dispatchers.Main) {
-        // add to current chat
         if (chatId.value == cInfo.id) {
-          // Prevent situation when chat item already in the list received from backend
           if (chatItems.value.none { it.id == cItem.id }) {
             if (chatItems.value.lastOrNull()?.id == ChatItem.TEMP_LIVE_CHAT_ITEM_ID) {
               addToChatItems(kotlin.math.max(0, chatItems.value.lastIndex), cItem)
@@ -480,7 +424,6 @@ object ChatModel {
     }
 
     suspend fun upsertChatItem(rhId: Long?, cInfo: ChatInfo, cItem: ChatItem): Boolean {
-      // update previews
       val i = getChatIndex(rhId, cInfo.id)
       val chat: Chat
       val res: Boolean
@@ -490,7 +433,6 @@ object ChatModel {
         if (pItem?.id == cItem.id) {
           chats[i] = chat.copy(chatItems = arrayListOf(cItem))
           if (pItem.isRcvNew && !cItem.isRcvNew) {
-            // status changed from New to Read, update counter
             decreaseCounterInChatNoContentTag(rhId, cInfo.id)
           }
         }
@@ -500,11 +442,8 @@ object ChatModel {
         res = true
       }
       return withContext(Dispatchers.Main) {
-        // update current chat
         if (chatId.value == cInfo.id) {
-          if (cItem.isDeletedContent || cItem.meta.itemDeleted != null) {
-            AudioPlayer.stop(cItem)
-          }
+          if (cItem.isDeletedContent || cItem.meta.itemDeleted != null) AudioPlayer.stop(cItem)
           val items = chatItems.value
           val itemIndex = items.indexOfFirst { it.id == cItem.id }
           if (itemIndex >= 0) {
@@ -512,17 +451,11 @@ object ChatModel {
             false
           } else {
             val status = chatItemStatuses.remove(cItem.id)
-            val ci = if (status != null && cItem.meta.itemStatus is CIStatus.SndNew) {
-              cItem.copy(meta = cItem.meta.copy(itemStatus = status))
-            } else {
-              cItem
-            }
+            val ci = if (status != null && cItem.meta.itemStatus is CIStatus.SndNew) cItem.copy(meta = cItem.meta.copy(itemStatus = status)) else cItem
             addToChatItems(ci)
             true
           }
-        } else {
-          res
-        }
+        } else res
       }
     }
 
@@ -531,36 +464,24 @@ object ChatModel {
         if (chatId.value == cInfo.id) {
           val items = chatItems.value
           val itemIndex = atIndex ?: items.indexOfFirst { it.id == cItem.id }
-          if (itemIndex >= 0) {
-            items[itemIndex] = cItem
-          }
-        } else if (status != null) {
-          chatItemStatuses[cItem.id] = status
-        }
+          if (itemIndex >= 0) items[itemIndex] = cItem
+        } else if (status != null) chatItemStatuses[cItem.id] = status
       }
     }
 
     fun removeChatItem(rhId: Long?, cInfo: ChatInfo, cItem: ChatItem) {
-      if (cItem.isRcvNew) {
-        decreaseCounterInChatNoContentTag(rhId, cInfo.id)
-      }
-      // update previews
+      if (cItem.isRcvNew) decreaseCounterInChatNoContentTag(rhId, cInfo.id)
       val i = getChatIndex(rhId, cInfo.id)
-      val chat: Chat
       if (i >= 0) {
-        chat = chats[i]
-        val pItem = chat.chatItems.lastOrNull()
-        if (pItem?.id == cItem.id) {
+        val chat = chats[i]
+        if (chat.chatItems.lastOrNull()?.id == cItem.id) {
           chats[i] = chat.copy(chatItems = arrayListOf(ChatItem.deletedItemDummy))
         }
       }
-      // remove from current chat
       if (chatId.value == cInfo.id) {
         chatItems.removeAllAndNotify {
-          // We delete taking into account meta.createdAt to make sure we will not be in situation when two items with the same id will be deleted
-          // (it can happen if already deleted chat item in backend still in the list and new one came with the same (re-used) chat item id)
           val remove = it.id == cItem.id && it.meta.createdAt == cItem.meta.createdAt
-          if (remove) { AudioPlayer.stop(it) }
+          if (remove) AudioPlayer.stop(it)
           remove
         }
       }
@@ -577,13 +498,9 @@ object ChatModel {
           meta = item.meta.copy(itemDeleted = CIDeleted.Moderated(Clock.System.now(), byGroupMember = byMember)),
           content = if (groupInfo.fullGroupPreferences.fullDelete.on) newContent else item.content
         )
-        if (item.isActiveReport) {
-          decreaseGroupReportsCounter(rhId, groupInfo.id)
-        }
+        if (item.isActiveReport) decreaseGroupReportsCounter(rhId, groupInfo.id)
         return updatedItem
       }
-
-      // this should not happen, only another member can "remove" user, user can only "leave" (another event).
       if (byMember.groupMemberId == groupInfo.membership.groupMemberId) {
         Log.d(TAG, "exiting removeMemberItems")
         return
@@ -591,25 +508,18 @@ object ChatModel {
       val cInfo = ChatInfo.Group(groupInfo)
       if (chatId.value == groupInfo.id) {
         for (i in 0 until chatItems.value.size) {
-          val updatedItem = removedUpdatedItem(chatItems.value[i])
-          if (updatedItem != null) {
-            updateChatItem(cInfo, updatedItem, atIndex = i)
-          }
+          removedUpdatedItem(chatItems.value[i])?.let { updateChatItem(cInfo, it, atIndex = i) }
         }
       } else {
         val i = getChatIndex(rhId, groupInfo.id)
         val chat = chats[i]
         if (chat.chatItems.isNotEmpty()) {
-          val updatedItem = removedUpdatedItem(chat.chatItems[0])
-          if (updatedItem != null) {
-            chats.value[i] = chat.copy(chatItems = listOf(updatedItem))
-          }
+          removedUpdatedItem(chat.chatItems[0])?.let { chats.value[i] = chat.copy(chatItems = listOf(it)) }
         }
       }
     }
 
     fun clearChat(rhId: Long?, cInfo: ChatInfo) {
-      // clear preview
       val i = getChatIndex(rhId, cInfo.id)
       if (i >= 0) {
         decreaseUnreadCounter(rhId, currentUser.value!!, chats[i].chatStats.unreadCount)
@@ -617,7 +527,6 @@ object ChatModel {
         chats[i] = chats[i].copy(chatItems = arrayListOf(), chatStats = Chat.ChatStats(), chatInfo = cInfo)
         markChatTagRead(chatBefore)
       }
-      // clear current chat
       if (chatId.value == cInfo.id) {
         chatItemStatuses.clear()
         chatItems.clearAndNotify()
@@ -625,25 +534,17 @@ object ChatModel {
     }
 
     val popChatCollector = PopChatCollector(this)
-
-    // TODO [contexts] no reason for this to be nested?
     class PopChatCollector(chatsCtx: ChatsContext) {
       private val subject = MutableSharedFlow<Unit>()
       private var remoteHostId: Long? = null
       private val chatsToPop = mutableMapOf<ChatId, Instant>()
-
       init {
         withLongRunningApi {
-          subject
-            .throttleLatest(2000)
-            .collect {
-              withContext(Dispatchers.Main) {
-                chatsCtx.chats.replaceAll(popCollectedChats())
-              }
-            }
+          subject.throttleLatest(2000).collect {
+            withContext(Dispatchers.Main) { chatsCtx.chats.replaceAll(popCollectedChats()) }
+          }
         }
       }
-
       suspend fun throttlePopChat(rhId: Long?, chatId: ChatId, currentPosition: Int) {
         if (rhId != remoteHostId) {
           chatsToPop.clear()
@@ -654,22 +555,14 @@ object ChatModel {
           subject.emit(Unit)
         }
       }
-
       fun clear() = chatsToPop.clear()
-
       private fun popCollectedChats(): List<Chat> {
         val chs = mutableListOf<Chat>()
-        // collect chats that received updates
         for ((chatId, popTs) in chatsToPop.entries) {
-          val ch = getChat(chatId)
-          if (ch != null) {
-            ch.popTs = popTs
-            chs.add(ch)
-          }
+          getChat(chatId)?.let { ch -> ch.popTs = popTs; chs.add(ch) }
         }
-        // sort chats by pop timestamp in descending order
         val newChats = ArrayList(chs.sortedByDescending { it.popTs })
-        newChats.addAll(chats.value.filter { !chatsToPop.containsKey(it.chatInfo.id) } )
+        newChats.addAll(chats.value.filter { !chatsToPop.containsKey(it.chatInfo.id) })
         chatsToPop.clear()
         return newChats
       }
@@ -677,19 +570,15 @@ object ChatModel {
 
     fun markChatItemsRead(remoteHostId: Long?, id: ChatId, itemIds: List<Long>? = null) {
       val (markedRead, mentionsMarkedRead) = markItemsReadInCurrentChat(id, itemIds)
-      // update preview
       val chatIdx = getChatIndex(remoteHostId, id)
       if (chatIdx >= 0) {
         val chat = chats[chatIdx]
-        val lastId = chat.chatItems.lastOrNull()?.id
-        if (lastId != null) {
+        if (chat.chatItems.lastOrNull()?.id != null) {
           val wasUnread = chat.unreadTag
           val unreadCount = if (itemIds != null) chat.chatStats.unreadCount - markedRead else 0
           val unreadMentions = if (itemIds != null) chat.chatStats.unreadMentions - mentionsMarkedRead else 0
           decreaseUnreadCounter(remoteHostId, currentUser.value!!, chat.chatStats.unreadCount - unreadCount)
-          chats[chatIdx] = chat.copy(
-            chatStats = chat.chatStats.copy(unreadCount = unreadCount, unreadMentions = unreadMentions)
-          )
+          chats[chatIdx] = chat.copy(chatStats = chat.chatStats.copy(unreadCount = unreadCount, unreadMentions = unreadMentions))
           updateChatTagReadNoContentTag(chats[chatIdx], wasUnread)
         }
       }
@@ -709,18 +598,12 @@ object ChatModel {
             val newItem = item.withStatus(CIStatus.RcvRead())
             items[i] = newItem
             if (newItem.meta.itemLive != true && newItem.meta.itemTimed?.ttl != null) {
-              items[i] = newItem.copy(meta = newItem.meta.copy(itemTimed = newItem.meta.itemTimed.copy(
-                deleteAt = Clock.System.now() + newItem.meta.itemTimed.ttl.toDuration(DurationUnit.SECONDS)))
-              )
+              items[i] = newItem.copy(meta = newItem.meta.copy(itemTimed = newItem.meta.itemTimed.copy(deleteAt = Clock.System.now() + newItem.meta.itemTimed.ttl.toDuration(DurationUnit.SECONDS))))
             }
             markedReadIds.add(item.id)
-            markedRead++
-            if (item.meta.userMention) {
-              mentionsMarkedRead++
-            }
+            markedRead++; if (item.meta.userMention) mentionsMarkedRead++
             if (itemIds != null) {
               itemIdsFromRange.remove(item.id)
-              // already set all needed items as read, can finish the loop
               if (itemIdsFromRange.isEmpty()) break
             }
           }
@@ -732,21 +615,14 @@ object ChatModel {
     }
 
     private fun decreaseCounterInChatNoContentTag(rhId: Long?, chatId: ChatId) {
-      // updates anything only in main ChatView, not GroupReportsView or anything else from the future
       if (contentTag != null) return
-
       val chatIndex = getChatIndex(rhId, chatId)
       if (chatIndex == -1) return
-
       val chat = chats[chatIndex]
       val unreadCount = kotlin.math.max(chat.chatStats.unreadCount - 1, 0)
       val wasUnread = chat.unreadTag
       decreaseUnreadCounter(rhId, currentUser.value!!, chat.chatStats.unreadCount - unreadCount)
-      chats[chatIndex] = chat.copy(
-        chatStats = chat.chatStats.copy(
-          unreadCount = unreadCount,
-        )
-      )
+      chats[chatIndex] = chat.copy(chatStats = chat.chatStats.copy(unreadCount = unreadCount))
       updateChatTagReadNoContentTag(chats[chatIndex], wasUnread)
     }
 
@@ -760,34 +636,23 @@ object ChatModel {
     }
 
     suspend fun upsertGroupMember(rhId: Long?, groupInfo: GroupInfo, member: GroupMember): Boolean {
-      // user member was updated
       if (groupInfo.membership.groupMemberId == member.groupMemberId) {
         updateGroup(rhId, groupInfo)
         return false
       }
-      // update current chat
       return if (chatId.value == groupInfo.id) {
         if (groupMembers.value.isNotEmpty() && groupMembers.value.firstOrNull()?.groupId != groupInfo.groupId) {
-          // stale data, should be cleared at that point, otherwise, duplicated items will be here which will produce crashes in LazyColumn
           groupMembers.value = emptyList()
           groupMembersIndexes.value = emptyMap()
         }
         val memberIndex = groupMembersIndexes.value[member.groupMemberId]
         val updated = chatItems.value.map {
-          // Take into account only specific changes, not all. Other member updates are not important and can be skipped
           if (it.chatDir is CIDirection.GroupRcv && it.chatDir.groupMember.groupMemberId == member.groupMemberId &&
-            (it.chatDir.groupMember.image != member.image ||
-                it.chatDir.groupMember.chatViewName != member.chatViewName ||
-                it.chatDir.groupMember.blocked != member.blocked ||
-                it.chatDir.groupMember.memberRole != member.memberRole)
-            )
+            (it.chatDir.groupMember.image != member.image || it.chatDir.groupMember.chatViewName != member.chatViewName || it.chatDir.groupMember.blocked != member.blocked || it.chatDir.groupMember.memberRole != member.memberRole))
             it.copy(chatDir = CIDirection.GroupRcv(member))
-          else
-            it
+          else it
         }
-        if (updated != chatItems.value) {
-          chatItems.replaceAll(updated)
-        }
+        if (updated != chatItems.value) chatItems.replaceAll(updated)
         val gMembers = groupMembers.value.toMutableList()
         if (memberIndex != null) {
           gMembers[memberIndex] = member
@@ -801,100 +666,54 @@ object ChatModel {
           groupMembersIndexes.value = gmIndexes
           true
         }
-      } else {
-        false
-      }
+      } else false
     }
 
     suspend fun updateGroupMemberConnectionStats(rhId: Long?, groupInfo: GroupInfo, member: GroupMember, connectionStats: ConnectionStats) {
-      val memberConn = member.activeConn
-      if (memberConn != null) {
-        val updatedConn = memberConn.copy(connectionStats = connectionStats)
-        val updatedMember = member.copy(activeConn = updatedConn)
-        upsertGroupMember(rhId, groupInfo, updatedMember)
-      }
+      member.activeConn?.let { upsertGroupMember(rhId, groupInfo, member.copy(activeConn = it.copy(connectionStats = connectionStats))) }
     }
 
-    fun increaseUnreadCounter(rhId: Long?, user: UserLike) {
-      changeUnreadCounterNoContentTag(rhId, user, 1)
-    }
-
-    fun decreaseUnreadCounter(rhId: Long?, user: UserLike, by: Int = 1) {
-      changeUnreadCounterNoContentTag(rhId, user, -by)
-    }
-
+    fun increaseUnreadCounter(rhId: Long?, user: UserLike) = changeUnreadCounterNoContentTag(rhId, user, 1)
+    fun decreaseUnreadCounter(rhId: Long?, user: UserLike, by: Int = 1) = changeUnreadCounterNoContentTag(rhId, user, -by)
     private fun changeUnreadCounterNoContentTag(rhId: Long?, user: UserLike, by: Int) {
-      // updates anything only in main ChatView, not GroupReportsView or anything else from the future
       if (contentTag != null) return
-
       val i = users.indexOfFirst { it.user.userId == user.userId && it.user.remoteHostId == rhId }
-      if (i != -1) {
-        users[i] = users[i].copy(unreadCount = users[i].unreadCount + by)
-      }
+      if (i != -1) users[i] = users[i].copy(unreadCount = users[i].unreadCount + by)
     }
 
     fun updateChatTagReadNoContentTag(chat: Chat, wasUnread: Boolean) {
-      // updates anything only in main ChatView, not GroupReportsView or anything else from the future
       if (contentTag != null) return
-
       val tags = chat.chatInfo.chatTags ?: return
       val nowUnread = chat.unreadTag
-
-      if (nowUnread && !wasUnread) {
-        tags.forEach { tag ->
-          unreadTags[tag] = (unreadTags[tag] ?: 0) + 1
-        }
-      } else if (!nowUnread && wasUnread) {
-        markChatTagReadNoContentTag_(chat, tags)
-      }
+      if (nowUnread && !wasUnread) tags.forEach { tag -> unreadTags[tag] = (unreadTags[tag] ?: 0) + 1 }
+      else if (!nowUnread && wasUnread) markChatTagReadNoContentTag_(chat, tags)
     }
 
     fun markChatTagRead(chat: Chat) {
-      if (chat.unreadTag) {
-        chat.chatInfo.chatTags?.let { tags ->
-          markChatTagReadNoContentTag_(chat, tags)
-        }
-      }
+      if (chat.unreadTag) chat.chatInfo.chatTags?.let { markChatTagReadNoContentTag_(chat, it) }
     }
 
     private fun markChatTagReadNoContentTag_(chat: Chat, tags: List<Long>) {
-      // updates anything only in main ChatView, not GroupReportsView or anything else from the future
       if (contentTag != null) return
-
       for (tag in tags) {
-        val count = unreadTags[tag]
-        if (count != null) {
-          unreadTags[tag] = maxOf(0, count - 1)
-        }
+        unreadTags[tag]?.let { unreadTags[tag] = maxOf(0, it - 1) }
       }
     }
 
-    fun increaseGroupReportsCounter(rhId: Long?, chatId: ChatId) {
-      changeGroupReportsCounter(rhId, chatId, 1)
-    }
-
-    fun decreaseGroupReportsCounter(rhId: Long?, chatId: ChatId, by: Int = 1) {
-      changeGroupReportsCounter(rhId, chatId, -by)
-    }
-
+    fun increaseGroupReportsCounter(rhId: Long?, chatId: ChatId) = changeGroupReportsCounter(rhId, chatId, 1)
+    fun decreaseGroupReportsCounter(rhId: Long?, chatId: ChatId, by: Int = 1) = changeGroupReportsCounter(rhId, chatId, -by)
     private fun changeGroupReportsCounter(rhId: Long?, chatId: ChatId, by: Int = 0) {
       if (by == 0) return
-
       val i = getChatIndex(rhId, chatId)
       if (i >= 0) {
         val chat = chats.value[i]
-        chats[i] = chat.copy(
-          chatStats = chat.chatStats.copy(
-            reportsCount = (chat.chatStats.reportsCount + by).coerceAtLeast(0),
-          )
-        )
+        chats[i] = chat.copy(chatStats = chat.chatStats.copy(reportsCount = (chat.chatStats.reportsCount + by).coerceAtLeast(0)))
         val wasReportsCount = chat.chatStats.reportsCount
         val nowReportsCount = chats[i].chatStats.reportsCount
-        val by = if (wasReportsCount == 0 && nowReportsCount > 0) 1 else if (wasReportsCount > 0 && nowReportsCount == 0) -1 else 0
-        changeGroupReportsTagNoContentTag(by)
+        val diff = if (wasReportsCount == 0 && nowReportsCount > 0) 1 else if (wasReportsCount > 0 && nowReportsCount == 0) -1 else 0
+        changeGroupReportsTagNoContentTag(diff)
       }
     }
-
     private fun changeGroupReportsTagNoContentTag(by: Int = 0) {
       if (by == 0 || contentTag != null) return
       presetTags[PresetTagKind.GROUP_REPORTS] = kotlin.math.max(0, (presetTags[PresetTagKind.GROUP_REPORTS] ?: 0) + by)
@@ -913,53 +732,35 @@ object ChatModel {
 
   fun updateCurrentUser(rhId: Long?, newProfile: Profile, preferences: FullChatPreferences? = null) {
     val current = currentUser.value ?: return
-    val updated = current.copy(
-      profile = newProfile.toLocalProfile(current.profile.profileId),
-      fullPreferences = preferences ?: current.fullPreferences
-    )
+    val updated = current.copy(profile = newProfile.toLocalProfile(current.profile.profileId), fullPreferences = preferences ?: current.fullPreferences)
     val i = users.indexOfFirst { it.user.userId == current.userId && it.user.remoteHostId == rhId }
-    if (i != -1) {
-      users[i] = users[i].copy(user = updated)
-    }
+    if (i != -1) users[i] = users[i].copy(user = updated)
     currentUser.value = updated
   }
 
   fun updateCurrentUserUiThemes(rhId: Long?, uiThemes: ThemeModeOverrides?) {
     val current = currentUser.value ?: return
-    val updated = current.copy(
-      uiThemes = uiThemes
-    )
+    val updated = current.copy(uiThemes = uiThemes)
     val i = users.indexOfFirst { it.user.userId == current.userId && it.user.remoteHostId == rhId }
-    if (i != -1) {
-      users[i] = users[i].copy(user = updated)
-    }
+    if (i != -1) users[i] = users[i].copy(user = updated)
     currentUser.value = updated
   }
 
   suspend fun addLiveDummy(chatInfo: ChatInfo): ChatItem {
     val cItem = ChatItem.liveDummy(chatInfo is ChatInfo.Direct)
-    withContext(Dispatchers.Main) {
-      chatsContext.addToChatItems(cItem)
-    }
+    withContext(Dispatchers.Main) { chatsContext.addToChatItems(cItem) }
     return cItem
   }
 
   fun removeLiveDummy() {
     if (chatsContext.chatItems.value.lastOrNull()?.id == ChatItem.TEMP_LIVE_CHAT_ITEM_ID) {
-      withApi {
-        withContext(Dispatchers.Main) {
-          chatsContext.removeLastChatItems()
-        }
-      }
+      withApi { withContext(Dispatchers.Main) { chatsContext.removeLastChatItems() } }
     }
   }
 
-  fun getChatItemIndexOrNull(cItem: ChatItem, reversedChatItems: List<ChatItem>): Int? {
-    val index = reversedChatItems.indexOfFirst { it.id == cItem.id }
-    return if (index != -1) index else null
-  }
+  fun getChatItemIndexOrNull(cItem: ChatItem, reversedChatItems: List<ChatItem>): Int? =
+    reversedChatItems.indexOfFirst { it.id == cItem.id }.takeIf { it != -1 }
 
-  // this function analyses "connected" events and assumes that each member will be there only once
   fun getConnectedMemberNames(cItem: ChatItem, reversedChatItems: List<ChatItem>): Pair<Int, List<String>> {
     var count = 0
     val ns = mutableListOf<String>()
@@ -968,54 +769,36 @@ object ChatModel {
       while (idx < reversedChatItems.size) {
         val ci = reversedChatItems[idx]
         if (ci.mergeCategory != cItem.mergeCategory) break
-        val m = ci.memberConnected
-        if (m != null) {
-          ns.add(m.displayName)
-        }
-        count++
-        idx++
+        ci.memberConnected?.let { ns.add(it.displayName) }
+        count++; idx++
       }
     }
     return count to ns
   }
 
-  // returns the index of the first item in the same merged group (the first hidden item)
-  // and the previous visible item with another merge category
   fun getPrevShownChatItem(ciIndex: Int?, ciCategory: CIMergeCategory?, reversedChatItems: List<ChatItem>): Pair<Int?, ChatItem?> {
     var i = ciIndex ?: return null to null
     val fst = reversedChatItems.lastIndex
     while (i < fst) {
       i++
       val ci = reversedChatItems[i]
-      if (ciCategory == null || ciCategory != ci.mergeCategory) {
-        return i - 1 to ci
-      }
+      if (ciCategory == null || ciCategory != ci.mergeCategory) return i - 1 to ci
     }
     return i to null
   }
 
-  // returns the previous member in the same merge group and the count of members in this group
   fun getPrevHiddenMember(member: GroupMember, range: IntRange, reversedChatItems: List<ChatItem>): Pair<GroupMember?, Int> {
     var prevMember: GroupMember? = null
     val names: MutableSet<Long> = mutableSetOf()
     for (i in range) {
-      val dir = reversedChatItems[i].chatDir
-      if (dir is CIDirection.GroupRcv) {
+      (reversedChatItems[i].chatDir as? CIDirection.GroupRcv)?.let { dir ->
         val m = dir.groupMember
-        if (prevMember == null && m.groupMemberId != member.groupMemberId) {
-          prevMember = m
-        }
+        if (prevMember == null && m.groupMemberId != member.groupMemberId) prevMember = m
         names.add(m.groupMemberId)
       }
     }
     return prevMember to names.size
   }
-
-//  func popChat(_ id: String) {
-//    if let i = getChatIndex(id) {
-//      popChat_(i)
-//    }
-//  }
 
   fun replaceConnReqView(id: String, withId: String) {
     if (id == showingInvitation.value?.connId) {
@@ -1038,7 +821,6 @@ object ChatModel {
         chatsContext.chatItems.clearAndNotify()
         chatModel.chatId.value = null
       }
-      // Close NewChatView
       ModalManager.start.closeModals()
       ModalManager.center.closeModals()
       ModalManager.end.closeModals()
@@ -1050,35 +832,20 @@ object ChatModel {
   }
 
   fun setContactNetworkStatus(contact: Contact, status: NetworkStatus) {
-    val conn = contact.activeConn
-    if (conn != null) {
-      networkStatuses[conn.agentConnId] = status
-    }
+    contact.activeConn?.let { networkStatuses[it.agentConnId] = status }
   }
 
-  fun contactNetworkStatus(contact: Contact): NetworkStatus {
-    val conn = contact.activeConn
-    return if (conn != null)
-      networkStatuses[conn.agentConnId] ?: NetworkStatus.Unknown()
-    else
-      NetworkStatus.Unknown()
-  }
+  fun contactNetworkStatus(contact: Contact): NetworkStatus =
+    contact.activeConn?.let { networkStatuses[it.agentConnId] } ?: NetworkStatus.Unknown()
 
   fun addTerminalItem(item: TerminalItem) {
     val maxItems = if (appPreferences.developerTools.get()) 500 else 200
-    if (terminalsVisible.isNotEmpty()) {
-      withApi {
-        addTerminalItem(item, maxItems)
-      }
-    } else {
-      addTerminalItem(item, maxItems)
-    }
+    if (terminalsVisible.isNotEmpty()) withApi { addTerminalItem(item, maxItems) }
+    else addTerminalItem(item, maxItems)
   }
 
   private fun addTerminalItem(item: TerminalItem, maxItems: Int) {
-    if (terminalItems.value.size >= maxItems) {
-      terminalItems.value = terminalItems.value.subList(1, terminalItems.value.size)
-    }
+    if (terminalItems.value.size >= maxItems) terminalItems.value = terminalItems.value.subList(1, terminalItems.value.size)
     terminalItems.value += item
   }
 
@@ -1125,163 +892,16 @@ data class User(
   override val localAlias: String = ""
 
   val hidden: Boolean = viewPwdHash != null
-
   val addressShared: Boolean = profile.contactLink != null
-
-  fun updateRemoteHostId(rh: Long?): User =
-    if (rh == null) this else this.copy(remoteHostId = rh)
+  fun updateRemoteHostId(rh: Long?): User = if (rh == null) this else this.copy(remoteHostId = rh)
 
   companion object {
     val sampleData = User(
-      remoteHostId = null,
-      userId = 1,
-      userContactId = 1,
-      localDisplayName = "alice",
-      profile = LocalProfile.sampleData,
-      fullPreferences = FullChatPreferences.sampleData,
-      activeUser = true,
-      activeOrder = 0,
-      showNtfs = true,
-      sendRcptsContacts = true,
-      sendRcptsSmallGroups = false,
-      viewPwdHash = null,
-      uiThemes = null,
+      remoteHostId = null, userId = 1, userContactId = 1, localDisplayName = "alice",
+      profile = LocalProfile.sampleData, fullPreferences = FullChatPreferences.sampleData,
+      activeUser = true, activeOrder = 0, showNtfs = true, sendRcptsContacts = true,
+      sendRcptsSmallGroups = false, viewPwdHash = null, uiThemes = null,
     )
-  }
-
-  private fun generateUniqueExportFileName(originalFileName: String, existingMedia: List<MediaToExport>): String {
-      var count = 0
-      val nameWithoutExt = originalFileName.substringBeforeLast('.', originalFileName)
-      // Standardize to lowercase, handle case where there's no extension
-      val extension = originalFileName.substringAfterLast('.', "").let { ext ->
-          if (ext.isNotEmpty()) ext.lowercase() else ""
-      }
-      var exportName: String
-      do {
-          val suffix = if (count == 0) "" else "_${count}"
-          exportName = "${nameWithoutExt}${suffix}${if (extension.isNotEmpty()) ".$extension" else ""}"
-          count++
-      } while (existingMedia.any { it.exportFileName.equals(exportName, ignoreCase = true) }) // Also consider ignoreCase for the check
-      return exportName
-  }
-
-  suspend fun exportChatHistory(chatId: String, startDate: String, endDate: String): Pair<List<ChatItem>, List<MediaToExport>> {
-    val allMessages = mutableListOf<ChatItem>()
-    val mediaToExportList = mutableListOf<MediaToExport>()
-    var pageCount = 0 // For progress messages (optional)
-    var currentPagination: ChatPagination = ChatPagination.Initial(count = 50)
-    var hasMoreMessages = true
-
-    Log.d(TAG, "Exporting chat history for $chatId from $startDate to $endDate")
-
-    while (hasMoreMessages) {
-        pageCount++
-        Log.d(TAG, "Fetching page $pageCount for chat export using pagination: $currentPagination")
-        // Optional: onProgress("Fetching messages (page $pageCount)...")
-
-        val responsePage = controller.apiGetMessagesInRange(chatId, startDate, endDate, currentPagination) // Changed to controller.
-
-        if (responsePage != null && responsePage.chatItems.isNotEmpty()) {
-            val newMessages = responsePage.chatItems.map { it.chatItem }
-            allMessages.addAll(newMessages)
-
-            Log.d(TAG, "Processing ${newMessages.size} messages for media content on page $pageCount...")
-            for (chatItem in newMessages) { // Iterate over the current page's messages
-                chatItem.file?.let { file ->
-                    val originalFileName = file.fileName
-                    val exportFileName = generateUniqueExportFileName(originalFileName, mediaToExportList)
-
-                    val loadedFilePath = getLoadedFilePath(file)
-                    val originalPath = loadedFilePath ?: "needs_download/$originalFileName"
-
-                    mediaToExportList.add(MediaToExport(
-                        originalFileName = originalFileName,
-                        exportFileName = exportFileName,
-                        originalPath = originalPath,
-                        fileId = file.id
-                    ))
-                    Log.d(TAG, "Added media: $exportFileName (Original: $originalFileName, Path: $originalPath)")
-                }
-            }
-
-            hasMoreMessages = responsePage.hasMore
-            if (hasMoreMessages) {
-                // If apiGetChat returns messages sorted newest-first (which ChatPagination.Initial might imply for some backends)
-                // then the last message is the oldest on the current page.
-                // To get messages older than this, we use ChatPagination.After.
-                val lastMessageId = newMessages.lastOrNull()?.id
-                if (lastMessageId != null) {
-                    currentPagination = ChatPagination.After(chatItemId = lastMessageId, count = 50)
-                    Log.d(TAG, "exportChatHistory: Updating pagination to fetch items after ID: $lastMessageId")
-                } else {
-                    Log.w(TAG, "exportChatHistory: hasMoreMessages is true but no lastMessageId found to determine next pagination key. Stopping.")
-                    hasMoreMessages = false
-                }
-            } else {
-                 Log.d(TAG, "No more messages from backend for $chatId after page $pageCount.")
-            }
-        } else {
-            if (responsePage == null) Log.d(TAG, "apiGetMessagesInRange returned null on page $pageCount.")
-            else Log.d(TAG, "apiGetMessagesInRange returned empty chatItems on page $pageCount.")
-            hasMoreMessages = false
-        }
-    }
-    Log.d(TAG, "Finished fetching all messages. Total messages: ${allMessages.size}, Media files: ${mediaToExportList.size}")
-    return Pair(allMessages, mediaToExportList)
-  }
-
-  private suspend fun apiGetMessagesInRange(chatId: String, startDate: String, endDate: String, pagination: ChatPagination): CR.ApiMessagesInRange? {
-    Log.i(TAG, "apiGetMessagesInRange called for $chatId. startDate '$startDate' and endDate '$endDate' are currently ignored by apiGetChat. Pagination: $pagination")
-
-    val typeChar = chatId.firstOrNull()
-    val idLong = chatId.drop(1).toLongOrNull()
-
-    if (idLong == null) {
-        Log.e(TAG, "Invalid chatId format: $chatId in apiGetMessagesInRange")
-        return null
-    }
-
-    val chatType = when (typeChar) {
-        '@' -> ChatType.Direct
-        '#' -> ChatType.Group
-        '*' -> ChatType.Local
-        else -> {
-            Log.e(TAG, "Unknown chat type for chatId: $chatId in apiGetMessagesInRange")
-            return null
-        }
-    }
-
-    val currentUser = chatModel.currentUser.value
-    if (currentUser == null) {
-        Log.e(TAG, "apiGetMessagesInRange: No current user found.")
-        return null
-    }
-
-    val chatData = controller.apiGetChat(
-        rh = currentUser.remoteHostId,
-        type = chatType,
-        id = idLong,
-        pagination = pagination,
-        search = ""
-    )
-
-    if (chatData == null) {
-        Log.w(TAG, "apiGetMessagesInRange: apiGetChat returned null for $chatId with pagination $pagination.")
-        return CR.ApiMessagesInRange(currentUser.toUserRef(), emptyList(), false)
-    }
-
-    val chat = chatData.first
-    val navInfo = chatData.second
-
-    val aciList = chat.chatItems.map { chatItem ->
-        AChatItem(chatInfo = chat.chatInfo, chatItem = chatItem)
-    }
-
-    val hasMore = navInfo.afterTotal > 0
-
-    Log.d(TAG, "apiGetMessagesInRange for $chatId (Page via $pagination): items fetched: ${aciList.size}, navInfo.afterTotal: ${navInfo.afterTotal} -> effective hasMore: $hasMore")
-
-    return CR.ApiMessagesInRange(user = currentUser.toUserRef(), chatItems = aciList, hasMore = hasMore)
   }
 }
 
@@ -1299,7 +919,6 @@ interface UserLike {
   val userId: Long
   val activeUser: Boolean
   val showNtfs: Boolean
-
   val showNotifications: Boolean get() = activeUser || showNtfs
 }
 
@@ -1315,10 +934,7 @@ data class UserInfo(
   val unreadCount: Int
 ) {
   companion object {
-    val sampleData = UserInfo(
-      user = User.sampleData,
-      unreadCount = 1
-    )
+    val sampleData = UserInfo(user = User.sampleData, unreadCount = 1)
   }
 }
 
@@ -1389,10 +1005,8 @@ data class Chat(
   data class ChatStats(
     val unreadCount: Int = 0,
     val unreadMentions: Int = 0,
-    // actual only via getChats() and getChat(.initial), otherwise, zero
     val reportsCount: Int = 0,
     val minUnreadItemId: Long = 0,
-    // actual only via getChats(), otherwise, false
     val unreadChat: Boolean = false
   )
 
@@ -2271,7 +1885,7 @@ class LinkPreview (
       uri = "https://www.duckduckgo.com",
       title = "Privacy, simplified.",
       description = "The Internet privacy company that empowers you to seamlessly take control of your personal information online, without any tradeoffs.",
-      image = "data:image/jpg;base64,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"
+      image = "data:image/jpg;base64,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"
     )
   }
 }
@@ -3917,9 +3531,9 @@ class CIGroupInvitation (
 @Serializable
 enum class CIGroupInvitationStatus {
   @SerialName("pending") Pending,
-  @SerialName("accepted") Accepted,
-  @SerialName("rejected") Rejected,
-  @SerialName("expired") Expired;
+  @Serializable @SerialName("accepted") Accepted,
+  @Serializable @SerialName("rejected") Rejected,
+  @Serializable @SerialName("expired") Expired;
 }
 
 @Serializable
@@ -4592,4 +4206,111 @@ class SharedPreference<T>(val get: () -> T, set: (T) -> Unit) {
   }
 }
 
+// New version of generateUniqueExportFileName as per the prompt
+private fun generateUniqueExportFileName(originalFileName: String, existingMedia: List<MediaToExport>): String {
+    var count = 0
+    val nameWithoutExt = originalFileName.substringBeforeLast('.', originalFileName)
+    // Standardize to lowercase, handle case where there's no extension
+    val extension = originalFileName.substringAfterLast('.', "").let { ext ->
+        if (ext.isNotEmpty()) ext.lowercase() else ""
+    }
+    var exportName: String
+    do {
+        val suffix = if (count == 0) "" else "_${'$'}count"
+        // Construct with potentially lowercased extension
+        exportName = "${'$'}{nameWithoutExt}${'$'}suffix${'$'}{if (extension.isNotEmpty()) ".$extension" else ""}"
+        count++
+    } while (existingMedia.any { it.exportFileName.equals(exportName, ignoreCase = true) }) // Case-insensitive check
+    return exportName
+}
+
+suspend fun exportChatHistory(chatId: String, startDate: String?, endDate: String?): Pair<List<ChatItem>, List<MediaToExport>> {
+    val parsedStartDate = startDate?.let { parseDateString(it) }
+    val parsedEndDate = endDate?.let { parseDateString(it) }
+    Log.i(TAG, "exportChatHistory: Called for chat $chatId. StartDate: '$startDate' (parsed: $parsedStartDate), EndDate: '$endDate' (parsed: $parsedEndDate)")
+
+    val allMessages = mutableListOf<ChatItem>()
+    val mediaToExport = mutableListOf<MediaToExport>() // Changed from existingFileNames
+    val processedFileIds = mutableSetOf<Long>()
+
+    var pagination: ChatPagination? = null
+    var pageCount = 0
+
+    do {
+        pageCount++
+        val response = apiGetMessagesInRange(chatId, pagination)
+        val newMessagesUnfiltered = response.items
+
+        val filteredMessagesOnPage = if (parsedStartDate != null || parsedEndDate != null) {
+            newMessagesUnfiltered.filter { chatItem ->
+                val itemInstant = chatItem.meta.itemTs
+                val itemDate = itemInstant.toLocalDateTime(TimeZone.UTC).date
+                val isAfterStartDate = parsedStartDate?.let { itemDate >= it } ?: true
+                val isBeforeEndDate = parsedEndDate?.let { itemDate <= it } ?: true
+                isAfterStartDate && isBeforeEndDate
+            }
+        } else {
+            newMessagesUnfiltered
+        }
+        Log.d(TAG, "exportChatHistory: Page $pageCount - Fetched ${newMessagesUnfiltered.size} messages, ${filteredMessagesOnPage.size} matched date range.")
+
+        allMessages.addAll(filteredMessagesOnPage)
+
+        for (message in filteredMessagesOnPage) {
+            message.file?.let { file ->
+                if (processedFileIds.add(file.fileId)) {
+                    val originalFileName = file.fileName
+                    // Updated call to generateUniqueExportFileName
+                    val exportFileName = generateUniqueExportFileName(originalFileName, mediaToExport)
+
+                    val originalPath = getLoadedFilePath(file) ?: if (file.fileSource != null) {
+                        "needs_download/${file.fileName}"
+                    } else {
+                        null
+                    }
+                    mediaToExport.add(MediaToExport(originalFileName, exportFileName, originalPath, file.fileId))
+                }
+            }
+        }
+
+        if (response.hasMore && newMessagesUnfiltered.isNotEmpty()) {
+            val lastMessageIdInUnfilteredPage = newMessagesUnfiltered.lastOrNull()?.id
+            if (lastMessageIdInUnfilteredPage != null) {
+                pagination = ChatPagination.After(lastMessageIdInUnfilteredPage, response.navInfo)
+                Log.d(TAG, "exportChatHistory: Updating pagination to fetch items after ID: $lastMessageIdInUnfilteredPage using navInfo: ${response.navInfo}")
+            } else {
+                 Log.w(TAG, "exportChatHistory: hasMore is true but newMessagesUnfiltered was empty or yielded no ID. Stopping.")
+                pagination = null
+            }
+        } else {
+            pagination = null
+        }
+
+    } while (pagination != null)
+    return Pair(allMessages, mediaToExport)
+}
+
+private suspend fun apiGetMessagesInRange(chatId: String, pagination: ChatPagination?): CR.ApiMessagesInRange {
+    val (type, numericId) = parseChatId(chatId) ?: return CR.ApiMessagesInRange(emptyList(), false, NavigationInfo())
+
+    val rhId = currentRemoteHost.value?.remoteHostId
+    val userId = currentUser.value?.userId ?: return CR.ApiMessagesInRange(emptyList(), false, NavigationInfo())
+
+    val apiGetChatResponse = controller.apiGetChat(
+        rhId = rhId,
+        userId = userId,
+        chatId = chatId,
+        aroundItemId = openAroundItemId.value,
+        pagination = pagination,
+        limit = 50
+    )
+
+    val items = apiGetChatResponse.chat?.chatItems?.map { it } ?: emptyList()
+    val hasMore = (apiGetChatResponse.navInfo?.afterTotal ?: 0) > 0
+
+    return CR.ApiMessagesInRange(items, hasMore, apiGetChatResponse.navInfo ?: NavigationInfo())
+}
+
 fun User.toUserRef(): UserRef = UserRef(userId = this.userId, localDisplayName = this.localDisplayName, activeUser = this.activeUser, showNtfs = this.showNtfs)
+
+[end of apps/multiplatform/common/src/commonMain/kotlin/chat/simplex/common/model/ChatModel.kt]
