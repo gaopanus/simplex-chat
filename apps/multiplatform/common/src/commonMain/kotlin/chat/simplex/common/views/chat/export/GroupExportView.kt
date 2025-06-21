@@ -139,16 +139,15 @@ fun GroupExportView(
                                 scope.launch(Dispatchers.Default) {
                                     try {
                                         exportProgressMessage.value = progressFetchingMsg
-                                        val historyResult = chatModel.controller.exportChatHistory(chat.id, startDate.value, endDate.value)
-                                        val messages = historyResult.first
-                                        val mediaFilesToExport = historyResult.second
+                                        val (messagesFromController, mediaFilesToExport) = chatModel.controller.exportChatHistory(chat.id, startDate.value, endDate.value)
+                                        val messagesForReport = messagesFromController.asReversed() // Reverse for oldest-first display
 
                                         exportProgressMessage.value = progressGeneratingHtmlMsg
                                         val htmlContent = HtmlExporter.generateHtmlReport(
-                                            chatName = chat.chatInfo.displayName,
+                                            chatName = chat.chatInfo.displayName, // Or a more specific name if available
                                             startDate = startDate.value,
                                             endDate = endDate.value,
-                                            messages = messages,
+                                            messages = messagesForReport, // Use the reversed list
                                             mediaFiles = mediaFilesToExport
                                         )
 
