@@ -21,9 +21,10 @@ import chat.simplex.common.platform.File
 import chat.simplex.common.platform.filesDir
 import chat.simplex.common.platform.separator
 import chat.simplex.common.platform.NavController
-import chat.simplex.common.platform.DummyNavController // Assuming it's moved here
+import chat.simplex.common.platform.DummyNavController
 import chat.simplex.common.platform.ColumnWithScrollBar
 import chat.simplex.common.platform.Log
+import chat.simplex.common.util.parseDateString // Import parseDateString
 // import chat.simplex.common.platform.showToast // showToast might be platform specific, using AlertManager
 import chat.simplex.common.views.helpers.AlertManager
 import chat.simplex.common.views.helpers.DefaultTopAppBar
@@ -58,6 +59,13 @@ fun GroupExportView(
     val exportFailedGenericTitle = stringResource(MR.strings.error_alert_title)
     val exportFailedGenericMsgPattern = stringResource(MR.strings.export_failed_generic)
     val backButtonDesc = stringResource(MR.strings.back)
+
+    // New string resources for date validation alerts
+    val invalidStartDateTitle = stringResource(MR.strings.export_error_invalid_start_date_title)
+    val invalidEndDateTitle = stringResource(MR.strings.export_error_invalid_end_date_title)
+    val invalidDateFormatDetails = stringResource(MR.strings.export_error_invalid_date_format_details)
+    val invalidDateRangeTitle = stringResource(MR.strings.export_error_invalid_date_range_title)
+    val startAfterEndDateDetails = stringResource(MR.strings.export_error_start_after_end_date_details)
 
 
     val startDate = rememberSaveable { mutableStateOf("") }

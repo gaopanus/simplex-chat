@@ -2650,4 +2650,11 @@
   <string name="export_complete_message">Export complete! Saved to %1$s</string>
   <string name="export_failed_saving">Export failed during saving.</string>
   <string name="export_failed_generic">Export failed: %1$s</string>
+
+  <!-- Export Date Validation Error Strings -->
+  <string name="export_error_invalid_start_date_title">Invalid Start Date</string>
+  <string name="export_error_invalid_end_date_title">Invalid End Date</string>
+  <string name="export_error_invalid_date_format_details">Please use YYYY-MM-DD format or leave the field blank.</string>
+  <string name="export_error_invalid_date_range_title">Invalid Date Range</string>
+  <string name="export_error_start_after_end_date_details">The start date cannot be after the end date.</string>
 </resources>

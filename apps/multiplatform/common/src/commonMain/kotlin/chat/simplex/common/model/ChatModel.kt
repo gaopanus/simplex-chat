@@ -1152,13 +1152,16 @@ data class User(
   private fun generateUniqueExportFileName(originalFileName: String, existingMedia: List<MediaToExport>): String {
       var count = 0
       val nameWithoutExt = originalFileName.substringBeforeLast('.', originalFileName)
-      val extension = originalFileName.substringAfterLast('.', "")
+      // Standardize to lowercase, handle case where there's no extension
+      val extension = originalFileName.substringAfterLast('.', "").let { ext ->
+          if (ext.isNotEmpty()) ext.lowercase() else ""
+      }
       var exportName: String
       do {
           val suffix = if (count == 0) "" else "_${count}"
           exportName = "${nameWithoutExt}${suffix}${if (extension.isNotEmpty()) ".$extension" else ""}"
           count++
-      } while (existingMedia.any { it.exportFileName == exportName })
+      } while (existingMedia.any { it.exportFileName.equals(exportName, ignoreCase = true) }) // Also consider ignoreCase for the check
       return exportName
   }
 
