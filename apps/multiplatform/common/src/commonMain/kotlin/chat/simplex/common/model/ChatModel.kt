@@ -4206,7 +4206,6 @@ class SharedPreference<T>(val get: () -> T, set: (T) -> Unit) {
   }
 }
 
-// New version of generateUniqueExportFileName as per the prompt
 private fun generateUniqueExportFileName(originalFileName: String, existingMedia: List<MediaToExport>): String {
     var count = 0
     val nameWithoutExt = originalFileName.substringBeforeLast('.', originalFileName)
@@ -4225,20 +4224,23 @@ private fun generateUniqueExportFileName(originalFileName: String, existingMedia
 }
 
 suspend fun exportChatHistory(chatId: String, startDate: String?, endDate: String?): Pair<List<ChatItem>, List<MediaToExport>> {
+    Log.i(TAG, "exportChatHistory: Attempting to fetch messages oldest-to-newest based on prompt's specific pagination interpretation.")
     val parsedStartDate = startDate?.let { parseDateString(it) }
     val parsedEndDate = endDate?.let { parseDateString(it) }
     Log.i(TAG, "exportChatHistory: Called for chat $chatId. StartDate: '$startDate' (parsed: $parsedStartDate), EndDate: '$endDate' (parsed: $parsedEndDate)")
 
     val allMessages = mutableListOf<ChatItem>()
-    val mediaToExport = mutableListOf<MediaToExport>() // Changed from existingFileNames
+    val mediaToExport = mutableListOf<MediaToExport>()
     val processedFileIds = mutableSetOf<Long>()
 
-    var pagination: ChatPagination? = null
+    // Initial Pagination: Assumption: ChatPagination.Last(N) fetches the N OLDEST messages.
+    var currentPaginationForAPI: ChatPagination? = ChatPagination.Last(count = 50)
     var pageCount = 0
 
     do {
         pageCount++
-        val response = apiGetMessagesInRange(chatId, pagination)
+        Log.d(TAG, "exportChatHistory: Fetching page $pageCount with pagination: ${currentPaginationForAPI?.javaClass?.simpleName}. Assuming page items sorted oldest-to-newest.")
+        val response = apiGetMessagesInRange(chatId, currentPaginationForAPI)
         val newMessagesUnfiltered = response.items
 
         val filteredMessagesOnPage = if (parsedStartDate != null || parsedEndDate != null) {
@@ -4254,13 +4256,12 @@ suspend fun exportChatHistory(chatId: String, startDate: String?, endDate: Strin
         }
         Log.d(TAG, "exportChatHistory: Page $pageCount - Fetched ${newMessagesUnfiltered.size} messages, ${filteredMessagesOnPage.size} matched date range.")
 
-        allMessages.addAll(filteredMessagesOnPage)
+        allMessages.addAll(filteredMessagesOnPage) // Append to the end for oldest-to-newest accumulation
 
         for (message in filteredMessagesOnPage) {
             message.file?.let { file ->
                 if (processedFileIds.add(file.fileId)) {
                     val originalFileName = file.fileName
-                    // Updated call to generateUniqueExportFileName
                     val exportFileName = generateUniqueExportFileName(originalFileName, mediaToExport)
 
                     val originalPath = getLoadedFilePath(file) ?: if (file.fileSource != null) {
@@ -4274,19 +4275,24 @@ suspend fun exportChatHistory(chatId: String, startDate: String?, endDate: Strin
         }
 
         if (response.hasMore && newMessagesUnfiltered.isNotEmpty()) {
-            val lastMessageIdInUnfilteredPage = newMessagesUnfiltered.lastOrNull()?.id
-            if (lastMessageIdInUnfilteredPage != null) {
-                pagination = ChatPagination.After(lastMessageIdInUnfilteredPage, response.navInfo)
-                Log.d(TAG, "exportChatHistory: Updating pagination to fetch items after ID: $lastMessageIdInUnfilteredPage using navInfo: ${response.navInfo}")
+            // Assumption: newMessagesUnfiltered are sorted oldest-to-newest for this page.
+            // So, the last item is the newest on this page.
+            val newestMessageInUnfilteredPageId = newMessagesUnfiltered.lastOrNull()?.id
+            if (newestMessageInUnfilteredPageId != null) {
+                // Assumption: ChatPagination.Before(id) is used to get the next block of *newer* messages
+                // when the initial fetch was the oldest block. This is specific to the prompt's wording.
+                currentPaginationForAPI = ChatPagination.Before(chatItemId = newestMessageInUnfilteredPageId, navInfo = response.navInfo, count = 50)
+                Log.d(TAG, "exportChatHistory (Oldest-Newest Fetch Mode - Prompt): Updating pagination to fetch items BEFORE ID (interpreted as next newer block): $newestMessageInUnfilteredPageId")
             } else {
-                 Log.w(TAG, "exportChatHistory: hasMore is true but newMessagesUnfiltered was empty or yielded no ID. Stopping.")
-                pagination = null
+                 Log.w(TAG, "exportChatHistory (Oldest-Newest Fetch Mode - Prompt): response.hasMore is true but newMessagesUnfiltered was empty or yielded no ID for 'Before' pagination. Stopping.")
+                currentPaginationForAPI = null
             }
         } else {
-            pagination = null
+            currentPaginationForAPI = null
         }
 
-    } while (pagination != null)
+    } while (currentPaginationForAPI != null)
+
     return Pair(allMessages, mediaToExport)
 }
 
@@ -4296,19 +4302,31 @@ private suspend fun apiGetMessagesInRange(chatId: String, pagination: ChatPagina
     val rhId = currentRemoteHost.value?.remoteHostId
     val userId = currentUser.value?.userId ?: return CR.ApiMessagesInRange(emptyList(), false, NavigationInfo())
 
+    val finalPagination = pagination ?: ChatPagination.Initial(count = 50)
+
+    Log.d(TAG, "apiGetMessagesInRange: Called with pagination type: ${finalPagination.javaClass.simpleName}")
+
     val apiGetChatResponse = controller.apiGetChat(
         rhId = rhId,
         userId = userId,
         chatId = chatId,
-        aroundItemId = openAroundItemId.value,
-        pagination = pagination,
+        aroundItemId = if (finalPagination is ChatPagination.Initial) openAroundItemId.value else null,
+        pagination = finalPagination,
         limit = 50
     )
 
     val items = apiGetChatResponse.chat?.chatItems?.map { it } ?: emptyList()
-    val hasMore = (apiGetChatResponse.navInfo?.afterTotal ?: 0) > 0
+    val navInfo = apiGetChatResponse.navInfo ?: NavigationInfo() // Ensure navInfo is not null
 
-    return CR.ApiMessagesInRange(items, hasMore, apiGetChatResponse.navInfo ?: NavigationInfo())
+    Log.i(TAG, "apiGetMessagesInRange: Current pagination is ${finalPagination.javaClass.simpleName}. navInfo.afterTotal = ${navInfo.afterTotal}. Assuming afterTotal > 0 means more messages exist in the requested direction.")
+
+    val hasMore = navInfo.afterTotal > 0
+
+    if (items.isNotEmpty()) {
+        Log.d(TAG, "apiGetMessagesInRange: First item ts: ${items.first().meta.itemTs}, Last item ts: ${items.last().meta.itemTs}. Count: ${items.size}")
+    }
+
+    return CR.ApiMessagesInRange(items, hasMore, navInfo)
 }
 
 fun User.toUserRef(): UserRef = UserRef(userId = this.userId, localDisplayName = this.localDisplayName, activeUser = this.activeUser, showNtfs = this.showNtfs)

@@ -184,7 +184,7 @@ fun GroupExportView(
                                         exportProgressMessage.value = progressFetchingMsg
                                         // Pass original string dates to the controller
                                         val (messagesFromController, mediaFilesToExport) = chatModel.controller.exportChatHistory(chat.id, startDateStr, endDateStr)
-                                        val messagesForReport = messagesFromController.asReversed()
+                                        val messagesForReport = messagesFromController // Removed .asReversed()
 
                                         exportProgressMessage.value = progressGeneratingHtmlMsg
                                         val htmlContent = HtmlExporter.generateHtmlReport(
