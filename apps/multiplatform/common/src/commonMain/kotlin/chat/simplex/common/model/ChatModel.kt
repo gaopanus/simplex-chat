@@ -35,7 +35,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.*
 import java.io.Closeable
-import chat.simplex.common.platform.File
+// import chat.simplex.common.platform.File // Already imported via platform.*
 import java.net.URI
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -853,7 +853,13 @@ object ChatModel {
   fun connectedToRemote(): Boolean = currentRemoteHost.value != null || remoteCtrlSession.value?.active == true
 }
 
-data class MediaToExport(val originalFileName: String, val exportFileName: String, val originalPath: String?, val fileId: Long)
+data class MediaToExport(
+    val originalFileName: String,
+    val exportFileName: String,
+    val originalPath: String?, // Path to the (potentially encrypted) file if available
+    val fileId: Long,
+    val cryptoArgs: CryptoFileArgs? // New field for decryption
+)
 
 data class ShowingInvitation(
   val connId: String,
@@ -4209,44 +4215,54 @@ class SharedPreference<T>(val get: () -> T, set: (T) -> Unit) {
 private fun generateUniqueExportFileName(originalFileName: String, existingMedia: List<MediaToExport>): String {
     var count = 0
     val nameWithoutExt = originalFileName.substringBeforeLast('.', originalFileName)
-    // Standardize to lowercase, handle case where there's no extension
     val extension = originalFileName.substringAfterLast('.', "").let { ext ->
         if (ext.isNotEmpty()) ext.lowercase() else ""
     }
     var exportName: String
     do {
-        val suffix = if (count == 0) "" else "_${'$'}count"
-        // Construct with potentially lowercased extension
-        exportName = "${'$'}{nameWithoutExt}${'$'}suffix${'$'}{if (extension.isNotEmpty()) ".$extension" else ""}"
+        val suffix = if (count == 0) "" else "_${count}"
+        exportName = "${nameWithoutExt}${suffix}${if (extension.isNotEmpty()) ".$extension" else ""}"
         count++
-    } while (existingMedia.any { it.exportFileName.equals(exportName, ignoreCase = true) }) // Case-insensitive check
+    } while (existingMedia.any { it.exportFileName.equals(exportName, ignoreCase = true) })
     return exportName
 }
 
-suspend fun exportChatHistory(chatId: String, startDate: String?, endDate: String?): Pair<List<ChatItem>, List<MediaToExport>> {
-    Log.i(TAG, "exportChatHistory: Attempting to fetch messages oldest-to-newest based on prompt's specific pagination interpretation.")
-    val parsedStartDate = startDate?.let { parseDateString(it) }
-    val parsedEndDate = endDate?.let { parseDateString(it) }
-    Log.i(TAG, "exportChatHistory: Called for chat $chatId. StartDate: '$startDate' (parsed: $parsedStartDate), EndDate: '$endDate' (parsed: $parsedEndDate)")
+// Updated signature for exportChatHistory
+suspend fun exportChatHistory(
+    chatId: String,
+    startDateStr: String?,
+    endDateStr: String?,
+    strFetchingPagePattern: String,
+    strDownloadingMedia: String,
+    strFinalizingMedia: String,
+    onProgressUpdate: (String) -> Unit
+): Pair<List<ChatItem>, List<MediaToExport>> {
+    Log.i(TAG, "exportChatHistory: Called for chat $chatId. StartDate: '$startDateStr', EndDate: '$endDateStr'")
+    val parsedStartDate = startDateStr?.let { parseDateString(it) }
+    val parsedEndDate = endDateStr?.let { parseDateString(it) }
 
     val allMessages = mutableListOf<ChatItem>()
-    val mediaToExport = mutableListOf<MediaToExport>()
+    val mediaToExportList = mutableListOf<MediaToExport>()
     val processedFileIds = mutableSetOf<Long>()
 
-    // Initial Pagination: Assumption: ChatPagination.Last(N) fetches the N OLDEST messages.
     var currentPaginationForAPI: ChatPagination? = ChatPagination.Last(count = 50)
     var pageCount = 0
 
+    // Initial progress update
+    onProgressUpdate(strFetchingPagePattern.format(1))
+
     do {
         pageCount++
-        Log.d(TAG, "exportChatHistory: Fetching page $pageCount with pagination: ${currentPaginationForAPI?.javaClass?.simpleName}. Assuming page items sorted oldest-to-newest.")
+        if (pageCount > 1) { // Update for subsequent pages
+            onProgressUpdate(strFetchingPagePattern.format(pageCount))
+        }
+        Log.d(TAG, "exportChatHistory: Fetching page $pageCount with pagination: ${currentPaginationForAPI?.javaClass?.simpleName}")
         val response = apiGetMessagesInRange(chatId, currentPaginationForAPI)
         val newMessagesUnfiltered = response.items
 
         val filteredMessagesOnPage = if (parsedStartDate != null || parsedEndDate != null) {
             newMessagesUnfiltered.filter { chatItem ->
-                val itemInstant = chatItem.meta.itemTs
-                val itemDate = itemInstant.toLocalDateTime(TimeZone.UTC).date
+                val itemDate = chatItem.meta.itemTs.toLocalDateTime(TimeZone.UTC).date
                 val isAfterStartDate = parsedStartDate?.let { itemDate >= it } ?: true
                 val isBeforeEndDate = parsedEndDate?.let { itemDate <= it } ?: true
                 isAfterStartDate && isBeforeEndDate
@@ -4256,45 +4272,113 @@ suspend fun exportChatHistory(chatId: String, startDate: String?, endDate: Strin
         }
         Log.d(TAG, "exportChatHistory: Page $pageCount - Fetched ${newMessagesUnfiltered.size} messages, ${filteredMessagesOnPage.size} matched date range.")
 
-        allMessages.addAll(filteredMessagesOnPage) // Append to the end for oldest-to-newest accumulation
+        allMessages.addAll(filteredMessagesOnPage)
 
-        for (message in filteredMessagesOnPage) {
-            message.file?.let { file ->
+        for (chatItemInFilter in filteredMessagesOnPage) {
+            chatItemInFilter.file?.let { file ->
                 if (processedFileIds.add(file.fileId)) {
                     val originalFileName = file.fileName
-                    val exportFileName = generateUniqueExportFileName(originalFileName, mediaToExport)
+                    val exportFileName = generateUniqueExportFileName(originalFileName, mediaToExportList)
+                    val loadedFilePath = getLoadedFilePath(file)
+                    val originalPath = if (loadedFilePath != null) loadedFilePath else "needs_download/$originalFileName"
+                    val cryptoArguments = file.fileSource?.cryptoArgs
 
-                    val originalPath = getLoadedFilePath(file) ?: if (file.fileSource != null) {
-                        "needs_download/${file.fileName}"
-                    } else {
-                        null
-                    }
-                    mediaToExport.add(MediaToExport(originalFileName, exportFileName, originalPath, file.fileId))
+                    mediaToExportList.add(
+                        MediaToExport(
+                            originalFileName = originalFileName,
+                            exportFileName = exportFileName,
+                            originalPath = originalPath,
+                            fileId = file.fileId,
+                            cryptoArgs = cryptoArguments
+                        )
+                    )
+                    Log.d(TAG, "Added media to export list: $exportFileName (Original: $originalFileName), Encrypted: ${cryptoArguments != null}")
                 }
             }
         }
 
         if (response.hasMore && newMessagesUnfiltered.isNotEmpty()) {
-            // Assumption: newMessagesUnfiltered are sorted oldest-to-newest for this page.
-            // So, the last item is the newest on this page.
             val newestMessageInUnfilteredPageId = newMessagesUnfiltered.lastOrNull()?.id
             if (newestMessageInUnfilteredPageId != null) {
-                // Assumption: ChatPagination.Before(id) is used to get the next block of *newer* messages
-                // when the initial fetch was the oldest block. This is specific to the prompt's wording.
                 currentPaginationForAPI = ChatPagination.Before(chatItemId = newestMessageInUnfilteredPageId, navInfo = response.navInfo, count = 50)
-                Log.d(TAG, "exportChatHistory (Oldest-Newest Fetch Mode - Prompt): Updating pagination to fetch items BEFORE ID (interpreted as next newer block): $newestMessageInUnfilteredPageId")
             } else {
-                 Log.w(TAG, "exportChatHistory (Oldest-Newest Fetch Mode - Prompt): response.hasMore is true but newMessagesUnfiltered was empty or yielded no ID for 'Before' pagination. Stopping.")
+                Log.w(TAG, "exportChatHistory: hasMore true, but no ID for 'Before' pagination. Stopping.")
                 currentPaginationForAPI = null
             }
         } else {
             currentPaginationForAPI = null
         }
-
     } while (currentPaginationForAPI != null)
 
-    return Pair(allMessages, mediaToExport)
+    val filesToAttemptDownload = mediaToExportList.filter {
+        it.originalPath != null && it.originalPath.startsWith("needs_download/")
+    }
+
+    if (filesToAttemptDownload.isNotEmpty()) {
+        onProgressUpdate(strDownloadingMedia)
+        Log.i(TAG, "exportChatHistory: Attempting to download ${filesToAttemptDownload.size} media files...")
+
+        val currentUser = ChatModel.currentUser.value
+        if (currentUser != null) {
+            for (mediaItem in filesToAttemptDownload) {
+                // Optional: onProgressUpdate(strDownloadingFilePattern.format(mediaItem.originalFileName))
+                Log.d(TAG, "exportChatHistory: Initiating download for: ${mediaItem.originalFileName} (File ID: ${mediaItem.fileId})")
+                val rhId = currentUser.remoteHostId
+                ChatModel.controller.receiveFile(
+                    rhId = rhId,
+                    user = currentUser,
+                    fileId = mediaItem.fileId,
+                    userApprovedRelays = true,
+                    auto = true
+                )
+                delay(200L)
+            }
+
+            val downloadWaitTime = 15000L
+            Log.i(TAG, "exportChatHistory: All download requests initiated. Waiting for ${downloadWaitTime / 1000}s for downloads to complete...")
+            delay(downloadWaitTime)
+
+            onProgressUpdate(strFinalizingMedia)
+            Log.i(TAG, "exportChatHistory: Fixed delay complete. Re-checking paths for downloaded files...")
+
+            val fileMapById = allMessages
+                .mapNotNull { it.file }
+                .associateBy { it.fileId }
+
+            val updatedMediaList = mediaToExportList.map { mediaItem ->
+                if (mediaItem.originalPath != null && mediaItem.originalPath.startsWith("needs_download/")) {
+                    val currentCIFile = fileMapById[mediaItem.fileId]
+                    if (currentCIFile?.fileSource?.filePath != null &&
+                        currentCIFile.fileSource.filePath != mediaItem.originalFileName &&
+                        !currentCIFile.fileSource.filePath.contains("simplex_temp_file_")) {
+
+                        val newLoadedPath = getLoadedFilePath(currentCIFile)
+
+                        if (newLoadedPath != null && File(newLoadedPath).exists()) {
+                            Log.i(TAG, "exportChatHistory: File ${mediaItem.originalFileName} successfully downloaded to: $newLoadedPath")
+                            mediaItem.copy(originalPath = newLoadedPath)
+                        } else {
+                            Log.w(TAG, "exportChatHistory: File ${mediaItem.originalFileName} (ID: ${mediaItem.fileId}) still not found locally after download attempt. CIFile path was: ${currentCIFile.fileSource.filePath}, Checked: $newLoadedPath")
+                            mediaItem
+                        }
+                    } else {
+                        Log.w(TAG, "exportChatHistory: File ${mediaItem.originalFileName} (ID: ${mediaItem.fileId}) source path not updated or still placeholder/temp after download attempt. Path: ${currentCIFile?.fileSource?.filePath}")
+                        mediaItem
+                    }
+                } else {
+                    mediaItem
+                }
+            }
+            mediaToExportList.clear()
+            mediaToExportList.addAll(updatedMediaList)
+        } else {
+            Log.w(TAG, "exportChatHistory: Cannot attempt media downloads, current user is null.")
+        }
+    }
+
+    return Pair(allMessages, mediaToExportList)
 }
+
 
 private suspend fun apiGetMessagesInRange(chatId: String, pagination: ChatPagination?): CR.ApiMessagesInRange {
     val (type, numericId) = parseChatId(chatId) ?: return CR.ApiMessagesInRange(emptyList(), false, NavigationInfo())
@@ -4316,7 +4400,7 @@ private suspend fun apiGetMessagesInRange(chatId: String, pagination: ChatPagina
     )
 
     val items = apiGetChatResponse.chat?.chatItems?.map { it } ?: emptyList()
-    val navInfo = apiGetChatResponse.navInfo ?: NavigationInfo() // Ensure navInfo is not null
+    val navInfo = apiGetChatResponse.navInfo ?: NavigationInfo()
 
     Log.i(TAG, "apiGetMessagesInRange: Current pagination is ${finalPagination.javaClass.simpleName}. navInfo.afterTotal = ${navInfo.afterTotal}. Assuming afterTotal > 0 means more messages exist in the requested direction.")
 

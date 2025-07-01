@@ -49,7 +49,7 @@ fun GroupExportView(
 
     // Pre-resolve string resources
     val progressStartingMsg = stringResource(MR.strings.export_progress_starting)
-    val progressFetchingMsg = stringResource(MR.strings.export_progress_fetching)
+    // val progressFetchingMsg = stringResource(MR.strings.export_progress_fetching) // Will be replaced by more granular messages
     val progressGeneratingHtmlMsg = stringResource(MR.strings.export_progress_generating_html)
     val progressSavingMsg = stringResource(MR.strings.export_progress_saving)
     val exportCompleteTitle = stringResource(MR.strings.export_chat_history_title) // Used for success as well
@@ -67,6 +67,11 @@ fun GroupExportView(
     val invalidDateRangeTitle = stringResource(MR.strings.export_error_invalid_date_range_title)
     val startAfterEndDateDetails = stringResource(MR.strings.export_error_start_after_end_date_details)
 
+    // New string patterns for progress callback
+    val progressFetchingPageMsgPattern = stringResource(MR.strings.export_progress_fetching_page)
+    val progressDownloadingMediaMsg = stringResource(MR.strings.export_progress_downloading_media)
+    // val progressDownloadingFileMsgPattern = stringResource(MR.strings.export_progress_downloading_file) // If individual file progress is implemented
+    val progressFinalizingMediaMsg = stringResource(MR.strings.export_progress_finalizing_media)
 
     val startDate = rememberSaveable { mutableStateOf("") }
     val endDate = rememberSaveable { mutableStateOf("") }
@@ -181,10 +186,21 @@ fun GroupExportView(
                                 exportProgressMessage.value = progressStartingMsg
                                 scope.launch(Dispatchers.Default) {
                                     try {
-                                        exportProgressMessage.value = progressFetchingMsg
-                                        // Pass original string dates to the controller
-                                        val (messagesFromController, mediaFilesToExport) = chatModel.controller.exportChatHistory(chat.id, startDateStr, endDateStr)
-                                        val messagesForReport = messagesFromController // Removed .asReversed()
+                                        // Initial message before specific page/download messages from callback
+                                        // exportProgressMessage.value = progressFetchingMsg // Replaced by callback
+
+                                        val (messagesFromController, mediaFilesToExport) = chatModel.controller.exportChatHistory(
+                                            chatId = chat.id,
+                                            startDate = startDateStr,
+                                            endDate = endDateStr,
+                                            strFetchingPagePattern = progressFetchingPageMsgPattern,
+                                            strDownloadingMedia = progressDownloadingMediaMsg,
+                                            strFinalizingMedia = progressFinalizingMediaMsg,
+                                            onProgressUpdate = { progressText ->
+                                                exportProgressMessage.value = progressText
+                                            }
+                                        )
+                                        val messagesForReport = messagesFromController // Already oldest-to-newest
 
                                         exportProgressMessage.value = progressGeneratingHtmlMsg
                                         val htmlContent = HtmlExporter.generateHtmlReport(

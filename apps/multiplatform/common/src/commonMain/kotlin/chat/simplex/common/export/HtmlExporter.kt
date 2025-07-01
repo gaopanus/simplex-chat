@@ -4,7 +4,10 @@ import chat.simplex.common.model.ChatItem
 import chat.simplex.common.model.MediaToExport
 import chat.simplex.common.model.CIDirection
 import chat.simplex.common.model.MsgContent
-import chat.simplex.common.platform.File
+import chat.simplex.common.model.CryptoFileArgs // Added for mediaItem.cryptoArgs
+import chat.simplex.common.model.decryptCryptoFile // Corrected import
+import chat.simplex.common.platform.File // Already present
+import chat.simplex.common.platform.Log // Added for logging
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -18,7 +21,9 @@ import kotlinx.datetime.format.MonthNames
 
 object HtmlExporter {
 
-    // Main HTML structure with CSS and JS
+    private const val TAG = "HtmlExporter" // Added TAG for logging
+
+    // Main HTML structure with CSS and JS (content unchanged, truncated for brevity)
     private val HTML_TEMPLATE = """
     <!DOCTYPE html>
     <html>
@@ -137,10 +142,8 @@ object HtmlExporter {
                 date.format(dateGroupFormatter)
             }
 
-            // Assuming groupBy preserves insertion order (LinkedHashMap), which it does.
-            // If messages were not pre-sorted chronologically, an additional sort of groupedMessages.keys might be needed.
             for ((dateStr, messagesOnDate) in groupedMessages) {
-                val dateId = dateStr.replace(" ", "-").toLowerCase() // Basic ID for linking
+                val dateId = dateStr.replace(" ", "-").lowercase()
                 messagesHtml.append(
                     """<div class="message service" id="message-DATE-${dateId}"><div class="body details">${htmlEncode(dateStr)}</div></div>"""
                 )
@@ -148,13 +151,12 @@ object HtmlExporter {
                 for (message in messagesOnDate) {
                     val senderName = when (message.chatDir) {
                         is CIDirection.GroupRcv -> message.chatDir.groupMember.displayName
-                        is CIDirection.DirectSnd, is CIDirection.GroupSnd, is CIDirection.LocalSnd -> "You" // Standardized "You"
+                        is CIDirection.DirectSnd, is CIDirection.GroupSnd, is CIDirection.LocalSnd -> "You"
                         else -> "Unknown Sender"
                     }
                     val initials = getInitials(senderName)
                     val userPicColorClass = "userpic${(senderName.hashCode().absoluteValue % 10)}"
                     val nameColorClass = "usercolor${(senderName.hashCode().absoluteValue % 10)}"
-
 
                     val itemTsLocal = message.meta.itemTs.toLocalDateTime(TimeZone.currentSystemDefault())
                     val shortTime = itemTsLocal.format(LocalDateTime.Format { hour(); char(':'); minute() })
@@ -164,33 +166,28 @@ object HtmlExporter {
                     })
 
                     val msgClass = if (senderName == "You") "message sent" else "message received"
-                    val msgId = "message-${message.id}" // Assuming ChatItem has a unique 'id' field
+                    val msgId = "message-${message.id}"
 
                     messagesHtml.append("""<div class="$msgClass" id="$msgId">""")
                     messagesHtml.append("""<div class="userpic $userPicColorClass"><div class="initials">$initials</div></div>""")
                     messagesHtml.append("""<div class="content">""")
                     messagesHtml.append("""<div class="bubble">""")
-
-                    // Name
                     messagesHtml.append("""<div class="name $nameColorClass">${htmlEncode(senderName)}</div>""")
 
-                    // Forwarded Info
                     message.meta.itemForwarded?.let { fw ->
                         val fromName = htmlEncode(fw.chatName ?: "Unknown Chat")
                         messagesHtml.append("""<div class="forwarded">Forwarded (from <span class="forwarded_from_name">$fromName</span>)</div>""")
                     }
 
-                    // Reply Info
                     message.meta.itemReplied?.let { reply ->
                         val repliedToName = htmlEncode(reply.itemSenderName ?: "Unknown User")
                         var replyTextSnippet = htmlEncode(reply.itemText ?: "")
-                        if (replyTextSnippet.length > 75) { // Truncate long reply texts
+                        if (replyTextSnippet.length > 75) {
                             replyTextSnippet = replyTextSnippet.substring(0, 72) + "..."
                         }
                         if (replyTextSnippet.isBlank() && reply.itemMedia != null) {
-                            replyTextSnippet = "<i>Media content</i>" // Placeholder if only media in reply
+                            replyTextSnippet = "<i>Media content</i>"
                         }
-
                         messagesHtml.append("""<div class="reply_to">""")
                         messagesHtml.append("""<div class="name">Replied to $repliedToName</div>""")
                         if (replyTextSnippet.isNotBlank()) {
@@ -199,27 +196,22 @@ object HtmlExporter {
                         messagesHtml.append("""</div>""")
                     }
 
-                    // Text Content
                     val textContent = htmlEncode(message.content.text)
                     if (textContent.isNotBlank()) {
                         messagesHtml.append("""<div class="text">$textContent</div>""")
                     }
 
-                    // Web Page Preview
                     if (message.content.msgContent is MsgContent.MCLink) {
                         val linkContent = message.content.msgContent as MsgContent.MCLink
                         linkContent.preview?.let { preview ->
                             val siteName = htmlEncode(preview.uri?.host ?: "Website")
                             val title = htmlEncode(preview.title ?: "No title")
                             val description = htmlEncode(preview.description ?: "")
-
                             messagesHtml.append("""<a href="${htmlEncode(preview.uri.toString())}" target="_blank" class="web_page_preview">""")
                             preview.image?.let { imgSrc ->
                                 if (imgSrc.startsWith("data:image")) {
                                     messagesHtml.append("""<img src="$imgSrc">""")
                                 } else if (imgSrc.isNotBlank()){
-                                     // For external images, linking might be safer than direct embedding due to CSP or mixed content issues.
-                                     // Or, if they are local paths from a download attempt, they might not be accessible relative to HTML.
                                     messagesHtml.append("""<div class="preview_content"><small><i>Image link: ${htmlEncode(imgSrc)}</i></small></div>""")
                                 }
                             }
@@ -233,21 +225,17 @@ object HtmlExporter {
                         }
                     }
 
-                    // Media Attachment
                     message.file?.let { chatFile ->
                         mediaFiles.find { it.fileId == chatFile.fileId }?.let { mediaItem ->
                             val mediaPath = "media/${htmlEncode(mediaItem.exportFileName)}"
                             val originalFileNameEnc = htmlEncode(mediaItem.originalFileName)
-                            // val isDownloaded = mediaItem.originalPath != null && !mediaItem.originalPath.startsWith("needs_download/")
                             val fileSizeStr = formatFileSize(chatFile.fileSize)
-
                             val typeStr = when (message.content.msgContent) {
                                 is MsgContent.MCImage -> "photo"
                                 is MsgContent.MCVideo -> "video"
                                 is MsgContent.MCVoice -> "audio"
                                 else -> "file"
                             }
-
                             messagesHtml.append("""<div class="media_attachment">""")
                             when (typeStr) {
                                 "photo" -> messagesHtml.append("""<img src="$mediaPath" alt="$originalFileNameEnc" title="$originalFileNameEnc">""")
@@ -255,25 +243,20 @@ object HtmlExporter {
                                 "audio" -> messagesHtml.append("""<audio controls src="$mediaPath" title="$originalFileNameEnc"><a href="$mediaPath">Download $originalFileNameEnc</a></audio>""")
                                 "file" -> {
                                     messagesHtml.append("""<div class="file_attachment">""")
-                                    messagesHtml.append("""<span class="icon">&#128190;</span>""") // Folder icon
+                                    messagesHtml.append("""<span class="icon">&#128190;</span>""")
                                     messagesHtml.append("""<div><div class="title"><a href="$mediaPath" target="_blank">$originalFileNameEnc</a></div>""")
                                     messagesHtml.append("""<div class="size">$fileSizeStr</div>""")
                                     messagesHtml.append("""</div></div>""")
                                 }
                             }
-                            // Optional: Add description if available in mediaItem or message
-                            // if (mediaItem.description.isNotBlank()) {
-                            //    messagesHtml.append("""<div class="media_description">${htmlEncode(mediaItem.description)}</div>""")
-                            // }
                             messagesHtml.append("""</div>""")
                         }
                     }
 
-                    // Time
                     messagesHtml.append("""<div class="time" title="$fullTimestamp">$shortTime</div>""")
                     messagesHtml.append("""</div>""") // bubble
                     messagesHtml.append("""</div>""") // content
-                    messagesHtml.append("""</div>""") // message (sent/received)
+                    messagesHtml.append("""</div>""") // message
                 }
             }
         }
@@ -282,9 +265,7 @@ object HtmlExporter {
             val start = if (startDate.isNotBlank()) startDate else "Beginning of chat"
             val end = if (endDate.isNotBlank()) endDate else "End of chat"
             " from $start to $end"
-        } else {
-            "" // No range specified, or all time
-        }
+        } else { "" }
 
         val exportTimestamp = Instant.now().toLocalDateTime(TimeZone.currentSystemDefault())
             .format(LocalDateTime.Format {
@@ -306,15 +287,13 @@ object HtmlExporter {
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
             .replace("'", "&#39;")
-            // Consider replacing newline characters with <br> if appropriate for display
-            // .replace("\n", "<br>")
     }
 
     private fun formatFileSize(bytes: Long): String {
-        if (bytes < 0) return "N/A" // Or throw an error
+        if (bytes < 0) return "N/A"
         if (bytes < 1024) return "$bytes B"
         val k = bytes.toDouble() / 1024.0
-        if (k < 1024) return "%.1f KB".format(k) // Using .format for locale-sensitive formatting if needed
+        if (k < 1024) return "%.1f KB".format(k)
         val m = k / 1024.0
         if (m < 1024) return "%.1f MB".format(m)
         val g = m / 1024.0
@@ -323,7 +302,7 @@ object HtmlExporter {
 
     private fun getInitials(name: String): String {
         if (name.isBlank()) return "?"
-        if (name == "You") return "Y" // Standardized "You"
+        if (name == "You") return "Y"
         val parts = name.split(" ").filter { it.isNotBlank() }
         return if (parts.isNotEmpty()) {
             if (parts.size >= 2) {
@@ -331,13 +310,8 @@ object HtmlExporter {
             } else {
                 parts[0].take(2).uppercase()
             }
-        } else {
-            "?" // Should not happen if name is not blank after filtering
-        }
+        } else "?"
     }
-
-    // The old 'मानव' function is replaced by direct formatting.
-    // No separate formatTimestamp helper is needed as per prompt's direct usage of format builders.
 
     suspend fun saveExportedData(
         targetDirectoryPath: String,
@@ -351,39 +325,51 @@ object HtmlExporter {
                 targetDir.mkdirs()
             }
 
-            val cleanChatName = chatName.replace(Regex("[^a-zA-Z0-9_.-]"), "_") // Sanitize for filename
+            val cleanChatName = chatName.replace(Regex("[^a-zA-Z0-9_.-]"), "_")
             val htmlFile = File(targetDir, "${cleanChatName}_export.html")
             htmlFile.writeText(htmlContent)
-            // Log.i("HtmlExporter", "HTML report saved to: ${htmlFile.absolutePath}") // Use Log if available
+            Log.i(TAG, "HTML report saved to: ${htmlFile.absolutePath}")
 
             val mediaDir = File(targetDir, "media")
             if (mediaFiles.isNotEmpty() && !mediaDir.exists()) {
                 mediaDir.mkdirs()
             }
-            // Log.i("HtmlExporter", "Media directory potentially created at: ${mediaDir.absolutePath}")
+            Log.d(TAG, "Media directory potentially created at: ${mediaDir.absolutePath}")
 
-
-            mediaFiles.forEach { mediaItem ->
+            for (mediaItem in mediaFiles) {
                 if (mediaItem.originalPath != null && !mediaItem.originalPath.startsWith("needs_download/")) {
                     val sourceFile = File(mediaItem.originalPath)
+                    val destinationFile = File(mediaDir, mediaItem.exportFileName)
+
                     if (sourceFile.exists()) {
-                        val destinationFile = File(mediaDir, mediaItem.exportFileName) // exportFileName should already be unique
                         try {
-                            sourceFile.copyTo(destinationFile, overwrite = true)
-                            // Log.i("HtmlExporter", "Copied ${mediaItem.originalFileName} to ${destinationFile.absolutePath}")
+                            if (mediaItem.cryptoArgs != null) {
+                                Log.d(TAG, "Decrypting ${mediaItem.originalFileName} to ${destinationFile.absolutePath ?: destinationFile.path}...")
+                                decryptCryptoFile(
+                                    fromPath = sourceFile.absolutePath ?: sourceFile.path,
+                                    cryptoArgs = mediaItem.cryptoArgs, // Name matches definition
+                                    toPath = destinationFile.absolutePath ?: destinationFile.path
+                                )
+                                Log.i(TAG, "Successfully decrypted and saved ${mediaItem.exportFileName}")
+                            } else {
+                                sourceFile.copyTo(destinationFile, overwrite = true)
+                                Log.i(TAG, "Successfully copied plaintext file ${mediaItem.exportFileName}")
+                            }
                         } catch (e: Exception) {
-                            // Log.e("HtmlExporter", "Error copying file ${mediaItem.originalFileName}: ${e.message}", e)
+                            Log.e(TAG, "Failed to copy/decrypt media file ${mediaItem.originalFileName} to ${destinationFile.name}: ${e.message}")
                         }
                     } else {
-                        // Log.w("HtmlExporter", "Source file not found for ${mediaItem.originalFileName} at ${mediaItem.originalPath}")
+                        Log.w(TAG, "Media source file not found: ${mediaItem.originalPath} for ${mediaItem.originalFileName}")
                     }
+                } else if (mediaItem.originalPath?.startsWith("needs_download/") == true) {
+                    Log.i(TAG, "Skipping (needs download): ${mediaItem.originalFileName} -> media/${mediaItem.exportFileName}")
                 } else {
-                    // Log.i("HtmlExporter", "Skipping download for ${mediaItem.originalFileName} (not available locally or marked needs_download).")
+                    Log.w(TAG, "Skipping media item with null originalPath: ${mediaItem.originalFileName}")
                 }
             }
             true
         } catch (e: Exception) {
-            // Log.e("HtmlExporter", "Error saving exported data: ${e.message}", e)
+            Log.e(TAG, "Error saving exported data: ${e.message}", e)
             false
         }
     }
