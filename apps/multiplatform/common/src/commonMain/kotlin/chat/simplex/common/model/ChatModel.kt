@@ -103,29 +103,35 @@ private suspend fun attemptMediaDownloadsAndUpdatePaths(
     }
 
     if (filesToAttemptDownload.isNotEmpty()) {
+        Log.i(TAG, "attemptMediaDownloadsAndUpdatePaths: Concurrently initiating download for ${filesToAttemptDownload.size} media files...")
         onProgressUpdate(strDownloadingMedia)
-        Log.i(TAG, "attemptMediaDownloadsAndUpdatePaths: Attempting to download ${filesToAttemptDownload.size} media files...")
 
-        // currentUser is already passed as a parameter, no need to get it from ChatModel.currentUser.value here
-        // rhId is also passed as a parameter
-
-        for (mediaItem in filesToAttemptDownload) {
-            Log.d(TAG, "attemptMediaDownloadsAndUpdatePaths: Initiating download for: ${mediaItem.originalFileName} (File ID: ${mediaItem.fileId})")
-            ChatModel.controller.receiveFile( // Explicitly call on ChatModel.controller if it's not part of the object scope
-                rhId = rhId,
-                user = currentUser,
-                fileId = mediaItem.fileId,
-                userApprovedRelays = true,
-                auto = true
-            )
-            delay(200L)
+        coroutineScope {
+            filesToAttemptDownload.forEach { mediaItem ->
+                launch(Dispatchers.IO) {
+                    Log.d(TAG, "attemptMediaDownloadsAndUpdatePaths: Initiating download for: ${mediaItem.originalFileName} (File ID: ${mediaItem.fileId})")
+                    try {
+                        // 'controller' is ChatModel.controller, which is the ChatController instance.
+                        ChatModel.controller.receiveFile(
+                            rhId = rhId,
+                            user = currentUser,
+                            fileId = mediaItem.fileId,
+                            userApprovedRelays = true, // Assuming relays are approved for export downloads
+                            auto = true
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "attemptMediaDownloadsAndUpdatePaths: Exception during receiveFile initiation for ${mediaItem.originalFileName}: ${e.message}", e)
+                    }
+                }
+            }
         }
+        // coroutineScope will suspend until all launched jobs (receiveFile calls) are complete in terms of initiation.
 
         val downloadWaitTime = 15000L
-        Log.i(TAG, "attemptMediaDownloadsAndUpdatePaths: All download requests initiated. Waiting for ${downloadWaitTime / 1000}s for downloads to complete...")
+        Log.i(TAG, "attemptMediaDownloadsAndUpdatePaths: All download requests initiated by coroutines. Waiting for ${downloadWaitTime / 1000}s for downloads to progress...")
         delay(downloadWaitTime)
 
-        onProgressUpdate(strFinalizingMedia)
+        onProgressUpdate(strFinalizingMedia) // Moved this to after the delay
         Log.i(TAG, "attemptMediaDownloadsAndUpdatePaths: Fixed delay complete. Re-checking paths for downloaded files...")
 
         val fileMapById = allMessages
