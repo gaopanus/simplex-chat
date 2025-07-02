@@ -67,7 +67,8 @@ data class MediaToExport(
     val exportFileName: String,
     val originalPath: String?,
     val fileId: Long,
-    val cryptoArgs: CryptoFileArgs?
+    val cryptoArgs: CryptoFileArgs?,
+    val localPreviewPath: String? = null // New field for path to locally cached preview
 )
 // ... (other data classes and enums, unchanged) ...
 
@@ -223,16 +224,37 @@ suspend fun exportChatHistory(
                     val originalPath = if (loadedFilePath != null) loadedFilePath else "needs_download/$originalFileName"
                     val cryptoArguments = file.fileSource?.cryptoArgs
 
+                    var localPreviewPathValue: String? = null
+                    val content = chatItemInFilter.content.msgContent
+                    if (content is MsgContent.MCImage || content is MsgContent.MCVideo) {
+                        val previewPathCandidate = if (content is MsgContent.MCImage) content.image else (content as MsgContent.MCVideo).image
+                        if (previewPathCandidate.isNotBlank() &&
+                            !previewPathCandidate.startsWith("data:") &&
+                            !previewPathCandidate.startsWith("http://") &&
+                            !previewPathCandidate.startsWith("https://")) {
+                            // Assuming it might be a local path, check if it exists
+                            if (File(previewPathCandidate).exists()) { // File from chat.simplex.common.platform
+                                localPreviewPathValue = previewPathCandidate
+                                Log.d(TAG, "Found local preview path for ${file.fileName}: $localPreviewPathValue")
+                            } else {
+                                Log.d(TAG, "Local preview path candidate for ${file.fileName} ('$previewPathCandidate') does not exist.")
+                            }
+                        } else {
+                            Log.d(TAG, "Preview path candidate for ${file.fileName} ('$previewPathCandidate') is a data URI, URL, or blank.")
+                        }
+                    }
+
                     mediaToExportList.add(
                         MediaToExport(
                             originalFileName = originalFileName,
                             exportFileName = exportFileName,
-                            originalPath = originalPath,
-                            fileId = file.fileId,
-                            cryptoArgs = cryptoArguments
+                            originalPath = originalPath, // This is for the full media (or "needs_download")
+                            fileId = file.fileId, // Corrected from file.id to file.fileId
+                            cryptoArgs = cryptoArguments,
+                            localPreviewPath = localPreviewPathValue // Populate the new field
                         )
                     )
-                    Log.d(TAG, "Added media to export list: $exportFileName (Original: $originalFileName), Encrypted: ${cryptoArguments != null}")
+                    Log.d(TAG, "Added media to export list: $exportFileName (Original: $originalFileName), Encrypted: ${cryptoArguments != null}, LocalPreview: $localPreviewPathValue")
                 }
             }
         }

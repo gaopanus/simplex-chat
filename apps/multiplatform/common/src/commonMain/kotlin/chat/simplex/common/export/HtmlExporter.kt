@@ -337,34 +337,56 @@ object HtmlExporter {
             Log.d(TAG, "Media directory potentially created at: ${mediaDir.absolutePath}")
 
             for (mediaItem in mediaFiles) {
+                val destinationFile = File(mediaDir, mediaItem.exportFileName) // Define destination once
+                var fullMediaSavedSuccessfully = false
+
                 if (mediaItem.originalPath != null && !mediaItem.originalPath.startsWith("needs_download/")) {
                     val sourceFile = File(mediaItem.originalPath)
-                    val destinationFile = File(mediaDir, mediaItem.exportFileName)
-
                     if (sourceFile.exists()) {
                         try {
                             if (mediaItem.cryptoArgs != null) {
                                 Log.d(TAG, "Decrypting ${mediaItem.originalFileName} to ${destinationFile.absolutePath ?: destinationFile.path}...")
                                 decryptCryptoFile(
                                     fromPath = sourceFile.absolutePath ?: sourceFile.path,
-                                    cryptoArgs = mediaItem.cryptoArgs, // Name matches definition
+                                    args = mediaItem.cryptoArgs,
                                     toPath = destinationFile.absolutePath ?: destinationFile.path
                                 )
                                 Log.i(TAG, "Successfully decrypted and saved ${mediaItem.exportFileName}")
+                                fullMediaSavedSuccessfully = true
                             } else {
                                 sourceFile.copyTo(destinationFile, overwrite = true)
                                 Log.i(TAG, "Successfully copied plaintext file ${mediaItem.exportFileName}")
+                                fullMediaSavedSuccessfully = true
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "Failed to copy/decrypt media file ${mediaItem.originalFileName} to ${destinationFile.name}: ${e.message}")
+                            Log.e(TAG, "Failed to copy/decrypt full media file ${mediaItem.originalFileName} to ${destinationFile.name}: ${e.message}")
+                            // fullMediaSavedSuccessfully remains false
                         }
                     } else {
-                        Log.w(TAG, "Media source file not found: ${mediaItem.originalPath} for ${mediaItem.originalFileName}")
+                        Log.w(TAG, "Full media source file not found: ${mediaItem.originalPath} for ${mediaItem.originalFileName}")
+                        // fullMediaSavedSuccessfully remains false
                     }
-                } else if (mediaItem.originalPath?.startsWith("needs_download/") == true) {
-                    Log.i(TAG, "Skipping (needs download): ${mediaItem.originalFileName} -> media/${mediaItem.exportFileName}")
-                } else {
-                    Log.w(TAG, "Skipping media item with null originalPath: ${mediaItem.originalFileName}")
+                } else { // This covers null originalPath or "needs_download/"
+                    Log.i(TAG, "Full media for ${mediaItem.originalFileName} marked as 'needs_download' or path is null. Skipping full media save attempt here.")
+                    // fullMediaSavedSuccessfully remains false
+                }
+
+                // Fallback to local preview if full media wasn't saved
+                if (!fullMediaSavedSuccessfully && mediaItem.localPreviewPath != null) {
+                    Log.i(TAG, "Full media for ${mediaItem.originalFileName} not saved. Attempting to copy local preview from ${mediaItem.localPreviewPath}.")
+                    val previewSourceFile = File(mediaItem.localPreviewPath)
+                    if (previewSourceFile.exists()) {
+                        try {
+                            previewSourceFile.copyTo(destinationFile, overwrite = true)
+                            Log.i(TAG, "Successfully copied local preview for ${mediaItem.originalFileName} to ${destinationFile.name}")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to copy local preview for ${mediaItem.originalFileName} from ${mediaItem.localPreviewPath}: ${e.message}")
+                        }
+                    } else {
+                        Log.w(TAG, "Local preview file not found at: ${mediaItem.localPreviewPath}")
+                    }
+                } else if (!fullMediaSavedSuccessfully && mediaItem.localPreviewPath == null && (mediaItem.originalPath != null && !mediaItem.originalPath.startsWith("needs_download/"))) {
+                    Log.w(TAG, "Full media for ${mediaItem.originalFileName} failed to save, and no local preview path was available.")
                 }
             }
             true
