@@ -238,20 +238,41 @@ object HtmlExporter {
                             }
                             messagesHtml.append("""<div class="media_attachment">""")
 
-                            // Determine the src for image/video, prioritizing data URI previews
-                            var mediaSrcPath = mediaPath // default to media/exportFileName
-                            if (mediaItem.localPreviewPath?.startsWith("data:image/") == true) {
-                                mediaSrcPath = mediaItem.localPreviewPath // Use data URI directly
-                            }
+                            // Define placeholders based on mediaItem.fileId
+                            val imgSrcPlaceholder = "%%IMG_SRC_${mediaItem.fileId}%%"
+                            val vidSrcPlaceholder = "%%VID_SRC_${mediaItem.fileId}%%"
+                            val vidPosterPlaceholder = "%%VID_POSTER_${mediaItem.fileId}%%"
+                            val audSrcPlaceholder = "%%AUD_SRC_${mediaItem.fileId}%%"
+                            val audHrefPlaceholder = "%%AUD_HREF_${mediaItem.fileId}%%" // For fallback link
+                            val fileHrefPlaceholder = "%%FILE_HREF_${mediaItem.fileId}%%"
 
-                            when (typeStr) {
-                                "photo" -> messagesHtml.append("""<img src="$mediaSrcPath" alt="$originalFileNameEnc" title="$originalFileNameEnc">""")
-                                "video" -> messagesHtml.append("""<video controls src="$mediaSrcPath" title="$originalFileNameEnc"><a href="$mediaPath">Download $originalFileNameEnc</a></video>""") // Fallback link always uses mediaPath
-                                "audio" -> messagesHtml.append("""<audio controls src="$mediaPath" title="$originalFileNameEnc"><a href="$mediaPath">Download $originalFileNameEnc</a></audio>""")
-                                "file" -> {
+                            // Web page preview images (MCLink) are handled above and embed data/external URLs directly.
+                            // This section is for main media attachments (message.file).
+
+                            when (message.content.msgContent) {
+                                is MsgContent.MCImage -> {
+                                    messagesHtml.append("""<img class="photo" src="$imgSrcPlaceholder" alt="$originalFileNameEnc" title="$originalFileNameEnc">""")
+                                }
+                                is MsgContent.MCVideo -> {
+                                    // Assuming poster might also be a placeholder if we generate local preview thumbnails for videos later.
+                                    // For now, VID_POSTER can be an empty string or a generic image path if not specifically handled.
+                                    messagesHtml.append("""<video controls preload="metadata" poster="$vidPosterPlaceholder" style="max-width: 400px;"><source src="$vidSrcPlaceholder" type="video/mp4"></video>""")
+                                }
+                                is MsgContent.MCVoice -> { // Treated as audio
+                                    messagesHtml.append("""<audio controls src="$audSrcPlaceholder"><a href="$audHrefPlaceholder">$originalFileNameEnc</a></audio>""")
+                                }
+                                is MsgContent.MCFile, is MsgContent.MCAudio -> { // MCAudio also uses file-like presentation
+                                    messagesHtml.append("""<div class="file_attachment">""")
+                                    messagesHtml.append("""<span class="icon">&#128190;</span>""") // Generic file icon
+                                    messagesHtml.append("""<div><div class="title"><a href="$fileHrefPlaceholder" target="_blank" download="$originalFileNameEnc">$originalFileNameEnc</a></div>""")
+                                    messagesHtml.append("""<div class="size">$fileSizeStr</div>""")
+                                    messagesHtml.append("""</div></div>""")
+                                }
+                                else -> {
+                                    // Fallback for unknown media types if any, could be similar to MCFile
                                     messagesHtml.append("""<div class="file_attachment">""")
                                     messagesHtml.append("""<span class="icon">&#128190;</span>""")
-                                    messagesHtml.append("""<div><div class="title"><a href="$mediaPath" target="_blank">$originalFileNameEnc</a></div>""")
+                                    messagesHtml.append("""<div><div class="title"><a href="$fileHrefPlaceholder" target="_blank" download="$originalFileNameEnc">$originalFileNameEnc</a></div>""")
                                     messagesHtml.append("""<div class="size">$fileSizeStr</div>""")
                                     messagesHtml.append("""</div></div>""")
                                 }
@@ -334,7 +355,61 @@ object HtmlExporter {
 
             val cleanChatName = chatName.replace(Regex("[^a-zA-Z0-9_.-]"), "_")
             val htmlFile = File(targetDir, "${cleanChatName}_export.html")
-            htmlFile.writeText(htmlContent)
+
+            var processedHtmlContent = htmlContent
+
+            // Replace placeholders in HTML content
+            for (mediaItem in mediaFiles) {
+                val relativeMediaPath = "media/${htmlEncode(mediaItem.exportFileName)}" // Path relative to HTML file
+
+                // Define placeholders to replace
+                val imgSrcPlaceholder = "%%IMG_SRC_${mediaItem.fileId}%%"
+                val vidSrcPlaceholder = "%%VID_SRC_${mediaItem.fileId}%%"
+                val vidPosterPlaceholder = "%%VID_POSTER_${mediaItem.fileId}%%"
+                val audSrcPlaceholder = "%%AUD_SRC_${mediaItem.fileId}%%"
+                val audHrefPlaceholder = "%%AUD_HREF_${mediaItem.fileId}%%"
+                val fileHrefPlaceholder = "%%FILE_HREF_${mediaItem.fileId}%%"
+
+                // Determine actual paths for placeholders
+                val actualImgSrc = if (mediaItem.isPhotoOrVideoPreview && mediaItem.localPreviewSource?.startsWith("data:") == true) {
+                    mediaItem.localPreviewSource // Embed data URI directly
+                } else {
+                    relativeMediaPath // Link to file in media folder
+                }
+                val actualVidSrc = if (mediaItem.isPhotoOrVideoPreview && mediaItem.localPreviewSource?.startsWith("data:") == true && mediaItem.localPreviewSource.startsWith("data:video/")) {
+                     // This case is less common for src, usually direct data URIs are for images or very short clips.
+                     // Prefer file path for videos if localPreviewSource is not a video data URI.
+                    mediaItem.localPreviewSource
+                } else if (mediaItem.isPhotoOrVideoPreview && mediaItem.localPreviewSource?.startsWith("data:image/") == true) {
+                    // If local preview is an image data URI, it can't be video src. Fallback to relative path.
+                    relativeMediaPath
+                }
+                else {
+                    relativeMediaPath
+                }
+
+                val actualVidPoster = if (mediaItem.isPhotoOrVideoPreview && mediaItem.localPreviewSource?.startsWith("data:image/") == true) {
+                    mediaItem.localPreviewSource // Use image data URI as poster
+                } else {
+                    // If no suitable data URI, check if exportFileName itself is an image (e.g. video thumbnail)
+                    // For simplicity now, if not a data URI, use empty or a generic path later.
+                    // Or, if localPreviewSource is a FILE path to an image, that could be copied and used.
+                    // For now, we'll use the relative media path if it's likely an image, or empty.
+                    if (mediaItem.exportFileName.endsWith(".png", true) || mediaItem.exportFileName.endsWith(".jpg", true) || mediaItem.exportFileName.endsWith(".jpeg", true)) {
+                        relativeMediaPath // Assuming the main file itself might be a poster if it's an image (e.g. for audio with album art)
+                                          // Or, if the video's exportFileName is its thumbnail.
+                    } else "" // No specific poster, or poster is same as video file.
+                }
+
+                processedHtmlContent = processedHtmlContent.replace(imgSrcPlaceholder, htmlEncode(actualImgSrc))
+                processedHtmlContent = processedHtmlContent.replace(vidSrcPlaceholder, htmlEncode(actualVidSrc))
+                processedHtmlContent = processedHtmlContent.replace(vidPosterPlaceholder, htmlEncode(actualVidPoster))
+                processedHtmlContent = processedHtmlContent.replace(audSrcPlaceholder, htmlEncode(relativeMediaPath))
+                processedHtmlContent = processedHtmlContent.replace(audHrefPlaceholder, htmlEncode(relativeMediaPath))
+                processedHtmlContent = processedHtmlContent.replace(fileHrefPlaceholder, htmlEncode(relativeMediaPath))
+            }
+
+            htmlFile.writeText(processedHtmlContent)
             Log.i(TAG, "HTML report saved to: ${htmlFile.absolutePath}")
 
             val mediaDir = File(targetDir, "media")
@@ -379,26 +454,27 @@ object HtmlExporter {
                 }
 
                 // Fallback to local preview if full media wasn't saved
-                if (!fullMediaSavedSuccessfully && mediaItem.localPreviewPath != null) {
-                    if (mediaItem.localPreviewPath.startsWith("data:image/")) {
-                        Log.i(TAG, "Local preview for ${mediaItem.originalFileName} is a data URI, already embedded in HTML. No copy needed here.")
+                if (!fullMediaSavedSuccessfully && mediaItem.localPreviewSource != null) {
+                    // If localPreviewSource is a data URI, it's already handled by generateHtmlReport or not applicable for file copy.
+                    if (mediaItem.localPreviewSource.startsWith("data:")) {
+                        Log.i(TAG, "Local preview source for ${mediaItem.originalFileName} is a data URI. No file copy needed here.")
                     } else {
-                        // localPreviewPath is a file path, attempt to copy it
-                        Log.i(TAG, "Full media for ${mediaItem.originalFileName} not saved. Attempting to copy local preview file from ${mediaItem.localPreviewPath}.")
-                        val previewSourceFile = File(mediaItem.localPreviewPath)
-                        if (previewSourceFile.exists()) {
+                        // localPreviewSource is a file path, attempt to copy it.
+                        Log.i(TAG, "Full media for ${mediaItem.originalFileName} not saved. Attempting to copy local preview file from ${mediaItem.localPreviewSource}.")
+                        val previewFile = File(mediaItem.localPreviewSource)
+                        if (previewFile.exists()) {
                             try {
-                                previewSourceFile.copyTo(destinationFile, overwrite = true)
+                                previewFile.copyTo(destinationFile, overwrite = true)
                                 Log.i(TAG, "Successfully copied local preview file for ${mediaItem.originalFileName} to ${destinationFile.name}")
                             } catch (e: Exception) {
-                                Log.e(TAG, "Failed to copy local preview file for ${mediaItem.originalFileName} from ${mediaItem.localPreviewPath}: ${e.message}")
+                                Log.e(TAG, "Failed to copy local preview file for ${mediaItem.originalFileName} from ${mediaItem.localPreviewSource}: ${e.message}")
                             }
                         } else {
-                            Log.w(TAG, "Local preview file not found at: ${mediaItem.localPreviewPath}")
+                            Log.w(TAG, "Local preview file not found at: ${mediaItem.localPreviewSource}")
                         }
                     }
-                } else if (!fullMediaSavedSuccessfully && mediaItem.localPreviewPath == null && (mediaItem.originalPath != null && !mediaItem.originalPath.startsWith("needs_download/"))) {
-                    Log.w(TAG, "Full media for ${mediaItem.originalFileName} failed to save, and no local preview path was available.")
+                } else if (!fullMediaSavedSuccessfully && mediaItem.localPreviewSource == null && (mediaItem.originalPath != null && !mediaItem.originalPath.startsWith("needs_download/"))) {
+                    Log.w(TAG, "Full media for ${mediaItem.originalFileName} failed to save, and no local preview source was available.")
                 }
             }
             true

@@ -64,11 +64,12 @@ object ChatModel {
 
 data class MediaToExport(
     val originalFileName: String,
-    val exportFileName: String,
-    val originalPath: String?,
+    val exportFileName: String, // This will be the base for the full media if available
+    val originalPath: String?,    // Path to the (potentially encrypted) full media file
     val fileId: Long,
     val cryptoArgs: CryptoFileArgs?,
-    val localPreviewPath: String? = null // New field for path to locally cached preview
+    val localPreviewSource: String?,      // New: Was localPreviewPath. Stores data URI or file path for preview.
+    val isPhotoOrVideoPreview: Boolean = false // New: True if localPreviewSource is for an image/video type.
 )
 // ... (other data classes and enums, unchanged) ...
 
@@ -224,23 +225,33 @@ suspend fun exportChatHistory(
                     val originalPath = if (loadedFilePath != null) loadedFilePath else "needs_download/$originalFileName"
                     val cryptoArguments = file.fileSource?.cryptoArgs
 
-                    var localPreviewPathValue: String? = null
+                    var localPreviewPathValue: String? = null // Will be renamed to localPreviewSourceValue
                     val content = chatItemInFilter.content.msgContent
+                    // isPhotoOrVideo will be set based on content type
+                    var isPhotoOrVideoPreviewValue = false
+
                     if (content is MsgContent.MCImage || content is MsgContent.MCVideo) {
+                        isPhotoOrVideoPreviewValue = true // Mark as photo/video type
                         val previewPathCandidate = if (content is MsgContent.MCImage) content.image else (content as MsgContent.MCVideo).image
-                        if (previewPathCandidate.isNotBlank() &&
-                            !previewPathCandidate.startsWith("data:") &&
+
+                        // Check if it's a data URI
+                        if (previewPathCandidate.startsWith("data:image/")) {
+                            localPreviewPathValue = previewPathCandidate // Store data URI directly
+                            Log.d(TAG, "Found data URI preview for ${file.fileName}")
+                        }
+                        // Check if it's a non-URL, non-data URI local path
+                        else if (previewPathCandidate.isNotBlank() &&
                             !previewPathCandidate.startsWith("http://") &&
                             !previewPathCandidate.startsWith("https://")) {
-                            // Assuming it might be a local path, check if it exists
-                            if (File(previewPathCandidate).exists()) { // File from chat.simplex.common.platform
+                            // Path to a temp file created by saveDataUriToTempFile or other local cache
+                            if (File(previewPathCandidate).exists()) {
                                 localPreviewPathValue = previewPathCandidate
-                                Log.d(TAG, "Found local preview path for ${file.fileName}: $localPreviewPathValue")
+                                Log.d(TAG, "Found local file preview path for ${file.fileName}: $localPreviewPathValue")
                             } else {
-                                Log.d(TAG, "Local preview path candidate for ${file.fileName} ('$previewPathCandidate') does not exist.")
+                                Log.d(TAG, "Local file preview path candidate for ${file.fileName} ('$previewPathCandidate') does not exist.")
                             }
                         } else {
-                            Log.d(TAG, "Preview path candidate for ${file.fileName} ('$previewPathCandidate') is a data URI, URL, or blank.")
+                            Log.d(TAG, "Preview path candidate for ${file.fileName} ('$previewPathCandidate') is a URL or blank, not suitable for localPreviewSource here.")
                         }
                     }
 
@@ -248,13 +259,14 @@ suspend fun exportChatHistory(
                         MediaToExport(
                             originalFileName = originalFileName,
                             exportFileName = exportFileName,
-                            originalPath = originalPath, // This is for the full media (or "needs_download")
-                            fileId = file.fileId, // Corrected from file.id to file.fileId
+                            originalPath = originalPath,
+                            fileId = file.fileId,
                             cryptoArgs = cryptoArguments,
-                            localPreviewPath = localPreviewPathValue // Populate the new field
+                            localPreviewSource = localPreviewPathValue, // Use the new name
+                            isPhotoOrVideoPreview = isPhotoOrVideoPreviewValue // Populate the new boolean
                         )
                     )
-                    Log.d(TAG, "Added media to export list: $exportFileName (Original: $originalFileName), Encrypted: ${cryptoArguments != null}, LocalPreview: $localPreviewPathValue")
+                    Log.d(TAG, "Added media to export list: $exportFileName (Original: $originalFileName), Encrypted: ${cryptoArguments != null}, PreviewSource: $localPreviewPathValue, IsPhotoVideo: $isPhotoOrVideoPreviewValue")
                 }
             }
         }
@@ -272,9 +284,8 @@ suspend fun exportChatHistory(
         }
     } while (currentPaginationForAPI != null)
 
-    // Logic moved to attemptMediaDownloadsAndUpdatePaths
     val localCurrentUser = ChatModel.currentUser.value
-    if (localCurrentUser != null) { // Check if user is available before calling helper
+    if (localCurrentUser != null) {
       attemptMediaDownloadsAndUpdatePaths(
           allMessages = allMessages,
           mediaToExportList = mediaToExportList,
@@ -328,5 +339,3 @@ fun User.toUserRef(): UserRef = UserRef(userId = this.userId, localDisplayName =
 
 // Ensure TAG is defined if not already (e.g., at the top of the file or ChatModel object)
 private const val TAG = "ChatModel" // Or "ChatController" if preferred for these functions
-
-[end of apps/multiplatform/common/src/commonMain/kotlin/chat/simplex/common/model/ChatModel.kt]
