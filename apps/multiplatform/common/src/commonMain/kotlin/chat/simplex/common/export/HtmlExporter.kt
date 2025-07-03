@@ -155,8 +155,8 @@ object HtmlExporter {
                         else -> "Unknown Sender"
                     }
                     val initials = getInitials(senderName)
-                    val userPicColorClass = "userpic${(senderName.hashCode().absoluteValue % 10)}"
-                    val nameColorClass = "usercolor${(senderName.hashCode().absoluteValue % 10)}"
+                    val userPicColorClass = "userpic${(kotlin.math.abs(senderName.hashCode()) % 10)}"
+                    val nameColorClass = "usercolor${(kotlin.math.abs(senderName.hashCode()) % 10)}"
 
                     val itemTsLocal = message.meta.itemTs.toLocalDateTime(TimeZone.currentSystemDefault())
                     val shortTime = itemTsLocal.format(LocalDateTime.Format { hour(); char(':'); minute() })
@@ -237,9 +237,16 @@ object HtmlExporter {
                                 else -> "file"
                             }
                             messagesHtml.append("""<div class="media_attachment">""")
+
+                            // Determine the src for image/video, prioritizing data URI previews
+                            var mediaSrcPath = mediaPath // default to media/exportFileName
+                            if (mediaItem.localPreviewPath?.startsWith("data:image/") == true) {
+                                mediaSrcPath = mediaItem.localPreviewPath // Use data URI directly
+                            }
+
                             when (typeStr) {
-                                "photo" -> messagesHtml.append("""<img src="$mediaPath" alt="$originalFileNameEnc" title="$originalFileNameEnc">""")
-                                "video" -> messagesHtml.append("""<video controls src="$mediaPath" title="$originalFileNameEnc"><a href="$mediaPath">Download $originalFileNameEnc</a></video>""")
+                                "photo" -> messagesHtml.append("""<img src="$mediaSrcPath" alt="$originalFileNameEnc" title="$originalFileNameEnc">""")
+                                "video" -> messagesHtml.append("""<video controls src="$mediaSrcPath" title="$originalFileNameEnc"><a href="$mediaPath">Download $originalFileNameEnc</a></video>""") // Fallback link always uses mediaPath
                                 "audio" -> messagesHtml.append("""<audio controls src="$mediaPath" title="$originalFileNameEnc"><a href="$mediaPath">Download $originalFileNameEnc</a></audio>""")
                                 "file" -> {
                                     messagesHtml.append("""<div class="file_attachment">""")
@@ -373,17 +380,22 @@ object HtmlExporter {
 
                 // Fallback to local preview if full media wasn't saved
                 if (!fullMediaSavedSuccessfully && mediaItem.localPreviewPath != null) {
-                    Log.i(TAG, "Full media for ${mediaItem.originalFileName} not saved. Attempting to copy local preview from ${mediaItem.localPreviewPath}.")
-                    val previewSourceFile = File(mediaItem.localPreviewPath)
-                    if (previewSourceFile.exists()) {
-                        try {
-                            previewSourceFile.copyTo(destinationFile, overwrite = true)
-                            Log.i(TAG, "Successfully copied local preview for ${mediaItem.originalFileName} to ${destinationFile.name}")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to copy local preview for ${mediaItem.originalFileName} from ${mediaItem.localPreviewPath}: ${e.message}")
-                        }
+                    if (mediaItem.localPreviewPath.startsWith("data:image/")) {
+                        Log.i(TAG, "Local preview for ${mediaItem.originalFileName} is a data URI, already embedded in HTML. No copy needed here.")
                     } else {
-                        Log.w(TAG, "Local preview file not found at: ${mediaItem.localPreviewPath}")
+                        // localPreviewPath is a file path, attempt to copy it
+                        Log.i(TAG, "Full media for ${mediaItem.originalFileName} not saved. Attempting to copy local preview file from ${mediaItem.localPreviewPath}.")
+                        val previewSourceFile = File(mediaItem.localPreviewPath)
+                        if (previewSourceFile.exists()) {
+                            try {
+                                previewSourceFile.copyTo(destinationFile, overwrite = true)
+                                Log.i(TAG, "Successfully copied local preview file for ${mediaItem.originalFileName} to ${destinationFile.name}")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to copy local preview file for ${mediaItem.originalFileName} from ${mediaItem.localPreviewPath}: ${e.message}")
+                            }
+                        } else {
+                            Log.w(TAG, "Local preview file not found at: ${mediaItem.localPreviewPath}")
+                        }
                     }
                 } else if (!fullMediaSavedSuccessfully && mediaItem.localPreviewPath == null && (mediaItem.originalPath != null && !mediaItem.originalPath.startsWith("needs_download/"))) {
                     Log.w(TAG, "Full media for ${mediaItem.originalFileName} failed to save, and no local preview path was available.")
@@ -396,5 +408,3 @@ object HtmlExporter {
         }
     }
 }
-
-// kotlin.math.abs(Int) should be used instead.
